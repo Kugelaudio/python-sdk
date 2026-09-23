@@ -1,0 +1,141 @@
+[project]
+name = "kugelaudio"
+# Single version source: kugelaudio/__init__.py (see [tool.hatch.version]). A static
+# version here is copied into every dependent uv.lock that installs this SDK by path,
+# so each release left those lockfiles stale; a dynamic version is not recorded there.
+dynamic = ["version"]
+description = "Official Python SDK for KugelAudio TTS API"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "KugelAudio", email = "hello@kugelaudio.com" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+keywords = ["tts", "text-to-speech", "audio", "streaming", "websocket"]
+
+dependencies = [
+    "httpx>=0.24.0",
+    "websockets>=11.0",
+]
+
+[project.optional-dependencies]
+livekit = [
+    # Floor is 1.1.0: the plugin's ChunkedStream/SynthesizeStream implement
+    # the output_emitter _run() signature introduced there; 1.0.x raises
+    # TypeError at synthesis time. Verified against the ingress framework
+    # e2e suite at 1.1.0, 1.2.14, and 1.5.17.
+    "livekit-agents>=1.1.0",
+    "aiohttp>=3.8.0",
+]
+pipecat = [
+    # The wrapper supports BOTH pipecat 0.x and 1.x at runtime (KUG-1123):
+    #   - legacy 0.x path: a fresh /ws/tts/multi context PER TURN, pre-created on
+    #     LLMFullResponseStartFrame and closed on LLMFullResponseEndFrame
+    #     (leak-safe; KUG-1123). _PipecatTTSSettings is None, run_tts(text).
+    #   - 1.x AudioContext path: closes each per-turn context via the
+    #     on_turn_context_created / on_audio_context_completed hooks (KUG-1087).
+    #     Those hooks are getattr-guarded, so they are inert no-ops on 0.x.
+    # Floor is 0.0.62 — the first release exposing pipecat.services.tts_service
+    # (TTSService moved there from pipecat.services.ai_services). tts.py imports
+    # that path, so anything < 0.0.62 fails at import; the old ">=0.0.60" floor
+    # was wrong (0.0.60/0.0.61 don't have the module). Keeping 1.x OUT of the
+    # floor means existing pipecat-0.x deployments (1.x only landed mid-April
+    # 2026) aren't force-upgraded; a fresh install still resolves to latest 1.x.
+    # Range verified by the python-sdk-pipecat-compat CI job: 0.0.62 (floor),
+    # 0.0.108 (latest 0.x), 1.3.0 (1.x).
+    "pipecat-ai>=0.0.62; python_version >= '3.11'",
+    "aiohttp>=3.8.0",
+]
+turn-detection = [
+    # ONNX Runtime 1.24.3 and 1.27 are verified with the published low-bit
+    # graphs. The wider range lets Pipecat 1.x resolve its compatible 1.24.x
+    # runtime while standalone/LiveKit installs use the latest qualified build.
+    # This optional extra requires Python 3.11+; the base SDK retains 3.9.
+    "huggingface-hub>=1.23.0,<2; python_version >= '3.11'",
+    "jinja2>=3.1.6,<4; python_version >= '3.11'",
+    "numpy>=1.26.0,<3; python_version >= '3.11'",
+    "onnxruntime-openvino==1.24.1; python_version >= '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "onnxruntime>=1.24.3,<2; python_version >= '3.11' and (sys_platform != 'linux' or platform_machine != 'x86_64')",
+    "pydantic>=2.13.4,<3; python_version >= '3.11'",
+    "torch>=2.13.0,<3; python_version >= '3.11'",
+    "transformers>=5.13.0,<6; python_version >= '3.11'",
+]
+watermark = [
+    # Local verification of the AI-generated-audio watermark (EU AI Act
+    # Art. 50). The bundled "lite" detector is 37k parameters reimplemented on
+    # numpy (kugelaudio/watermark/_lite.py), so this extra deliberately pulls
+    # NO tensor runtime — the whole point is that verifying a clip costs a
+    # numpy install, not a torch install. The weights ship in the wheel
+    # (~152 KB, SHA-256 pinned), so detection also works offline.
+    #
+    # Latest stable verified against PyPI 2026-08-12: numpy 2.x, soundfile
+    # 0.14.0. soundfile is only needed by detect_file().
+    "numpy>=1.26.0,<3",
+    "soundfile>=0.12.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+tools = [
+    "flask>=3.0.0",
+    "soundfile>=0.12.0",
+    "numpy>=1.26.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+kugelaudio-skills = "kugelaudio.skills:main"
+
+[project.urls]
+Homepage = "https://kugelaudio.com"
+Documentation = "https://docs.kugelaudio.com"
+Repository = "https://github.com/Kugelaudio/python-sdk"
+Issues = "https://github.com/Kugelaudio/python-sdk/issues"
+Changelog = "https://github.com/Kugelaudio/python-sdk/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "kugelaudio/__init__.py"
+
+[tool.uv]
+# The version lives in __init__.py, so uv must reinstall a path/editable copy when
+# that file changes or importlib.metadata keeps reporting the previous version.
+cache-keys = [{ file = "pyproject.toml" }, { file = "kugelaudio/__init__.py" }]
+
+[tool.hatch.build.targets.wheel]
+packages = ["kugelaudio"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "kugelaudio/",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+]
+
+[dependency-groups]
+dev = [
+    "numpy>=1.26.0,<3",
+    "pydantic>=2.13.4,<3",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

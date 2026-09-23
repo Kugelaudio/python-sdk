@@ -1,0 +1,28 @@
+name: test
+
+# Runs on the public mirror github.com/Kugelaudio/python-sdk, not in the
+# monorepo (CONTRIBUTING.md). Same unit suite as the monorepo's python-sdk check;
+# the live tests need an API key and run only there.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          python-version: '3.12'
+      - run: uv sync --group dev
+      - run: >-
+          uv run pytest tests
+          --ignore=tests/test_streaming.py
+          -k "not live and not integration and not concurrent and not staging"
