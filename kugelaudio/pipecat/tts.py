@@ -171,6 +171,9 @@ class _TTSOptions:
     base_url: str
     language: str | None = None
     normalize: bool = True
+    project_id: int | None = None
+    # None = the project's default dictionaries; [] = explicit opt-out.
+    dictionary_ids: list[int] | None = None
 
 
 class KugelAudioTTSService(TTSService):
@@ -209,6 +212,8 @@ class KugelAudioTTSService(TTSService):
         max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
         language: Optional[str] = None,
         normalize: bool = True,
+        project_id: Optional[int] = None,
+        dictionary_ids: Optional[list[int]] = None,
         region: Optional[str] = None,
         base_url: Optional[str] = None,
         on_word_timestamps: Optional[
@@ -234,6 +239,15 @@ class KugelAudioTTSService(TTSService):
             language: ISO 639-1 language code (e.g., 'en', 'de'). When unset,
                 the server uses the voice's primary language (English if none).
             normalize: Apply text normalization. Defaults to True.
+            project_id: Project whose pronunciation dictionaries apply at
+                synthesis. Required for any dictionary to apply and for a
+                non-empty *dictionary_ids*; ``None`` (default) sends no
+                project.
+            dictionary_ids: Per-request dictionary selection. ``None``
+                (default) applies all active dictionaries of the project;
+                ``[]`` disables dictionaries; a list of IDs applies exactly
+                those. A non-empty list without *project_id* raises
+                ``ValueError``.
             region: API endpoint region. Use ``"eu"`` for the direct EU endpoint.
                 Overrides any prefix detected from the API key. Ignored when
                 *base_url* is set.
@@ -280,6 +294,14 @@ class KugelAudioTTSService(TTSService):
                 f"Supported rates: {SUPPORTED_SAMPLE_RATES}"
             )
 
+        if dictionary_ids and project_id is None:
+            # The server rejects this on every synthesis; fail at
+            # construction instead of on the first turn.
+            raise ValueError(
+                "dictionary_ids requires project_id: the server rejects a "
+                "dictionary selection without its project."
+            )
+
         cfg_scale = clamp_cfg_scale(cfg_scale)
 
         clean_key, detected_region = _parse_api_key(kugelaudio_api_key)
@@ -301,6 +323,8 @@ class KugelAudioTTSService(TTSService):
             max_new_tokens=max_new_tokens,
             language=language,
             normalize=normalize,
+            project_id=project_id,
+            dictionary_ids=dictionary_ids,
             api_key=clean_key,
             base_url=resolved_url,
         )
@@ -361,6 +385,8 @@ class KugelAudioTTSService(TTSService):
             max_new_tokens=self._opts.max_new_tokens,
             normalize=self._opts.normalize,
             language=self._opts.language,
+            project_id=self._opts.project_id,
+            dictionary_ids=self._opts.dictionary_ids,
             word_timestamps=self._on_word_timestamps is not None,
             on_word_timestamps=self._on_word_timestamps,
         )

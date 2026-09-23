@@ -6,7 +6,7 @@ name = "kugelaudio"
 dynamic = ["version"]
 description = "Official Python SDK for KugelAudio TTS API"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "KugelAudio", email = "hello@kugelaudio.com" }
@@ -16,7 +16,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -62,7 +61,7 @@ turn-detection = [
     # ONNX Runtime 1.24.3 and 1.27 are verified with the published low-bit
     # graphs. The wider range lets Pipecat 1.x resolve its compatible 1.24.x
     # runtime while standalone/LiveKit installs use the latest qualified build.
-    # This optional extra requires Python 3.11+; the base SDK retains 3.9.
+    # This optional extra requires Python 3.11+; the base SDK supports 3.10+.
     "huggingface-hub>=1.23.0,<2; python_version >= '3.11'",
     "jinja2>=3.1.6,<4; python_version >= '3.11'",
     "numpy>=1.26.0,<3; python_version >= '3.11'",

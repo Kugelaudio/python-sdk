@@ -215,6 +215,26 @@ def _validate_temperature(temperature: float | None) -> float | None:
     return temperature
 
 
+def _validate_dictionary_selection(
+    project_id: int | None, dictionary_ids: list[int] | None
+) -> None:
+    """Refuse a dictionary selection that names no project.
+
+    The server rejects a non-empty ``dictionary_ids`` without ``project_id``
+    on every synthesis, so fail at configuration time instead of on the
+    first turn. ``[]`` (explicit opt-out
+    from the project's defaults) needs no project.
+
+    Raises:
+        ValueError: If *dictionary_ids* is non-empty and *project_id* is None.
+    """
+    if dictionary_ids and project_id is None:
+        raise ValueError(
+            "dictionary_ids requires project_id: the server rejects a "
+            "dictionary selection without its project."
+        )
+
+
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
@@ -229,11 +249,15 @@ class _TTSOptions:
     language: str | None = None
     speed: float | None = None
     temperature: float | None = None
+    project_id: int | None = None
+    # None = the project's default dictionaries; [] = explicit opt-out.
+    dictionary_ids: list[int] | None = None
 
     def __post_init__(self) -> None:
         self.language = _validate_language(self.language)
         self.speed = _validate_speed(self.speed)
         self.temperature = _validate_temperature(self.temperature)
+        _validate_dictionary_selection(self.project_id, self.dictionary_ids)
 
 
 @dataclass
@@ -515,6 +539,13 @@ class _Connection:
                     # field, dropped with only a server log if nested.
                     if self._opts.temperature is not None:
                         msg["temperature"] = self._opts.temperature
+                    # Top-level StreamUpdate fields too. Dictionaries apply
+                    # only when the frame names their project; [] is an
+                    # explicit opt-out and is sent, only None is omitted.
+                    if self._opts.project_id is not None:
+                        msg["project_id"] = self._opts.project_id
+                    if self._opts.dictionary_ids is not None:
+                        msg["dictionary_ids"] = self._opts.dictionary_ids
                     voice_settings: dict[str, Any] = {}
                     if self._opts.voice_id is not None:
                         voice_settings["voice_id"] = self._opts.voice_id

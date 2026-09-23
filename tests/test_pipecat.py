@@ -335,6 +335,8 @@ class TestTTSStreamDelegation:
             "max_new_tokens": 1024,
             "normalize": False,
             "language": "de",
+            "project_id": None,
+            "dictionary_ids": None,
             "word_timestamps": False,
             "on_word_timestamps": None,
         }
@@ -1077,3 +1079,66 @@ class TestTTSReusesSessionContext:
 
         assert session.closed_contexts == [ctx]
         assert tts._legacy_turn_context_id is None
+
+
+class _RecordingWS:
+    """Fake /ws/tts/multi socket: records sends, confirms one context."""
+
+    def __init__(self, context_id: str) -> None:
+        import json
+
+        self.sent: list[dict] = []
+        self._replies = [json.dumps({"context_created": True, "context_id": context_id})]
+
+    async def send(self, data: str) -> None:
+        import json
+
+        self.sent.append(json.loads(data))
+
+    async def recv(self) -> str:
+        if not self._replies:
+            raise asyncio.TimeoutError()
+        return self._replies.pop(0)
+
+    async def close(self) -> None:
+        pass
+
+
+class TestDictionaryWireFormat:
+    """project_id / dictionary_ids reach the first context frame (ENG-572)."""
+
+    @pytest.mark.asyncio
+    async def test_first_context_frame_carries_project_and_dictionaries(self):
+        from kugelaudio.pipecat import KugelAudioTTSService
+
+        tts = KugelAudioTTSService(
+            api_key="test-key", voice_id=1, language="en", project_id=42, dictionary_ids=[7]
+        )
+        session = tts._create_multi_session()
+        ws = _RecordingWS("ctx1")
+        session._ws = ws
+
+        await session._start_session("ctx1")
+
+        assert ws.sent[0]["project_id"] == 42
+        assert ws.sent[0]["dictionary_ids"] == [7]
+
+    @pytest.mark.asyncio
+    async def test_absent_when_not_set(self):
+        from kugelaudio.pipecat import KugelAudioTTSService
+
+        tts = KugelAudioTTSService(api_key="test-key", voice_id=1, language="en")
+        session = tts._create_multi_session()
+        ws = _RecordingWS("ctx1")
+        session._ws = ws
+
+        await session._start_session("ctx1")
+
+        assert "project_id" not in ws.sent[0]
+        assert "dictionary_ids" not in ws.sent[0]
+
+    def test_selection_without_project_raises(self):
+        from kugelaudio.pipecat import KugelAudioTTSService
+
+        with pytest.raises(ValueError, match="project_id"):
+            KugelAudioTTSService(api_key="test-key", voice_id=1, dictionary_ids=[7])

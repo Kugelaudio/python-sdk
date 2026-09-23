@@ -65,6 +65,7 @@ from ._connection import (
     _diagnostic_error,
     _SynthesizeContent,
     _TTSOptions,
+    _validate_dictionary_selection,
     _validate_language,
     _validate_speed,
     _validate_temperature,
@@ -140,6 +141,8 @@ class TTS(tts.TTS):
         language: str | None = None,
         speed: float | None = None,
         temperature: float | None = None,
+        project_id: int | None = None,
+        dictionary_ids: list[int] | None = None,
         region: str | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -189,6 +192,15 @@ class TTS(tts.TTS):
                 engine default in place. Values outside the range raise
                 ``ValueError``; the API rejects them, it does not clamp.
                 Session-wide on ``/ws/tts/multi``, exactly like ``speed``.
+            project_id: Project whose pronunciation dictionaries apply at
+                synthesis. Required for any dictionary to apply and for a
+                non-empty *dictionary_ids*; ``None`` (default) sends no
+                project.
+            dictionary_ids: Per-request dictionary selection. ``None``
+                (default) applies all active dictionaries of the project;
+                ``[]`` disables dictionaries; a list of IDs applies exactly
+                those. A non-empty list without *project_id* raises
+                ``ValueError``.
             region: API endpoint region. Use ``"eu"`` for the direct EU endpoint.
                 Overrides any prefix detected from the API key. Ignored when
                 *base_url* is set.
@@ -244,6 +256,8 @@ class TTS(tts.TTS):
             language=language,
             speed=speed,
             temperature=temperature,
+            project_id=project_id,
+            dictionary_ids=dictionary_ids,
             api_key=clean_key,
             base_url=resolved_url,
         )
@@ -455,6 +469,8 @@ class TTS(tts.TTS):
         language: NotGivenOr[str | None] = NOT_GIVEN,
         speed: NotGivenOr[float | None] = NOT_GIVEN,
         temperature: NotGivenOr[float | None] = NOT_GIVEN,
+        project_id: NotGivenOr[int | None] = NOT_GIVEN,
+        dictionary_ids: NotGivenOr[list[int] | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options dynamically.
 
@@ -485,12 +501,23 @@ class TTS(tts.TTS):
             temperature: Sampling variance, range [0.0, 1.0]; ``None``
                 restores the engine default. Session-wide like ``speed``,
                 with the same reject-don't-clamp and recycling semantics.
+            project_id: Project whose pronunciation dictionaries apply;
+                ``None`` sends no project.
+            dictionary_ids: Dictionary selection; ``None`` restores the
+                project's defaults, ``[]`` disables dictionaries.
 
         Raises:
             ValueError: If *speed* is outside [0.8, 1.2], *temperature* is
-                outside [0.0, 1.0], or *language* is not a supported
-                ISO 639-1 code.
+                outside [0.0, 1.0], *language* is not a supported
+                ISO 639-1 code, or the resulting options carry a non-empty
+                *dictionary_ids* without *project_id*.
         """
+        # Validate the combined selection before touching any option so a
+        # rejected update leaves the previous options in place.
+        _validate_dictionary_selection(
+            project_id if is_given(project_id) else self._opts.project_id,
+            dictionary_ids if is_given(dictionary_ids) else self._opts.dictionary_ids,
+        )
         changed = False
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
@@ -528,6 +555,12 @@ class TTS(tts.TTS):
             if validated_temperature != self._opts.temperature:
                 self._opts.temperature = validated_temperature
                 changed = True
+        if is_given(project_id) and project_id != self._opts.project_id:
+            self._opts.project_id = project_id
+            changed = True
+        if is_given(dictionary_ids) and dictionary_ids != self._opts.dictionary_ids:
+            self._opts.dictionary_ids = dictionary_ids
+            changed = True
         if changed and self._current_connection:
             old_conn = self._current_connection
             old_conn.mark_non_current()
