@@ -30,6 +30,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+live = [
+    # 3.14.1 is the official Live client version contract-tested by this SDK.
+    # OpenAI Live requires Python 3.10+; the base Kugel SDK retains Python 3.9.
+    "openai[realtime]>=3.14.1,<4; python_version >= '3.10'",
+]
 livekit = [
     # Floor is 1.1.0: the plugin's ChunkedStream/SynthesizeStream implement
     # the output_emitter _run() signature introduced there; 1.0.x raises
@@ -131,6 +136,7 @@ include = [
 [dependency-groups]
 dev = [
     "numpy>=1.26.0,<3",
+    "openai[realtime]>=3.14.1,<4; python_version >= '3.10'",
     "pydantic>=2.13.4,<3",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
