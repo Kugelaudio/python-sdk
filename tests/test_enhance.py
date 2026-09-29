@@ -32,11 +32,12 @@ from kugelaudio import (
     InsufficientCreditsError,
     KugelAudio,
     KugelAudioConnectionError,
+    KugelAudioError,
+    RateLimitError,
     ValidationError,
     load_audio,
     load_audio_stream,
 )
-from kugelaudio.enhance import _classify_close
 
 
 def _pcm(value: int, n: int, width: int = 2) -> bytes:
@@ -210,30 +211,85 @@ def test_save_writes_valid_wav(tmp_path):
     assert target.read_bytes() == result.wav
 
 
+def _error_body(status: int, code: str, message: str) -> dict:
+    """The server's error body: ``{error, error_code, code}``."""
+    return {"error": message, "error_code": code, "code": status}
+
+
+_RPM = "Rate limit exceeded (10 requests per minute)"
+_CONCURRENCY = "Concurrent generation limit reached (2)"
+_NOT_ENABLED = "Speech enhancement is not enabled for this organization."
+_AT_CAPACITY = "Speech enhancement is at capacity. Please try again shortly."
+
+
 @pytest.mark.parametrize(
-    ("status", "body", "expected"),
+    ("status", "body", "headers", "expected", "retry_after"),
     [
-        (400, {"error": "bad wav", "error_code": "VALIDATION_ERROR"}, ValidationError),
-        (401, {"error": "bad key", "error_code": "UNAUTHORIZED"}, AuthenticationError),
+        (
+            400,
+            _error_body(400, "VALIDATION_ERROR", "bad wav"),
+            {},
+            ValidationError,
+            None,
+        ),
+        (
+            401,
+            _error_body(401, "UNAUTHORIZED", "bad key"),
+            {},
+            AuthenticationError,
+            None,
+        ),
+        (
+            402,
+            _error_body(402, "INSUFFICIENT_CREDITS", "Insufficient credits"),
+            {},
+            InsufficientCreditsError,
+            None,
+        ),
+        (
+            403,
+            _error_body(403, "UNAUTHORIZED", _NOT_ENABLED),
+            {},
+            AuthenticationError,
+            None,
+        ),
+        (
+            429,
+            _error_body(429, "RATE_LIMITED", _RPM),
+            {"Retry-After": "42"},
+            RateLimitError,
+            42,
+        ),
+        (429, _error_body(429, "RATE_LIMITED", _CONCURRENCY), {}, RateLimitError, None),
         (
             503,
-            {
-                "error": "Enhancement backend unavailable",
-                "error_code": "MODEL_UNAVAILABLE",
-            },
+            _error_body(503, "MODEL_UNAVAILABLE", _AT_CAPACITY),
+            {"Retry-After": "5"},
             KugelAudioConnectionError,
+            5,
         ),
     ],
+    ids=["400", "401", "402", "403-not-enabled", "429-rpm", "429-concurrency", "503"],
 )
-async def test_http_errors_map_to_sdk_exceptions(status, body, expected):
-    client = _http_client(lambda request: httpx.Response(status, json=body))
+async def test_http_errors_map_to_sdk_exceptions(
+    status, body, headers, expected, retry_after
+):
+    headers = {**headers, "x-request-id": "req-http"}
+    client = _http_client(
+        lambda request: httpx.Response(status, json=body, headers=headers)
+    )
     with pytest.raises(expected) as sync_err:
         client.enhance.generate_sync(load_audio(INPUT_WAV), model=MODEL)
     with pytest.raises(expected) as async_err:
         await client.enhance.generate(
             load_audio(INPUT_WAV), model=MODEL, speaker=load_audio(SPEAKER_WAV)
         )
-    assert sync_err.value.status_code == async_err.value.status_code == status
+    for err in (sync_err.value, async_err.value):
+        assert err.status_code == status
+        assert err.error_code == body["error_code"]
+        assert err.retry_after == retry_after
+        assert err.request_id == "req-http"
+        assert body["error"] in err.message
 
 
 def test_non_wav_response_raises():
@@ -364,18 +420,47 @@ def test_load_audio_stream_rejects_non_wav_and_empty():
 # ---------------------------------------------------------------- stream
 
 
+# A post-accept refusal: an optional error frame, then a close code.
+_Refusal = tuple[dict | None, int]
+
+
+def _frame(status: int, code: str, message: str, **extra: Any) -> dict:
+    """A server error frame in the shared ``{type, error, error_code, code}`` shape."""
+    return {
+        "type": "error",
+        "request_id": "req-ws",
+        **_error_body(status, code, message),
+        **extra,
+    }
+
+
 class _Server:
     """Local server speaking the enhancement stream protocol.
 
     Echoes each binary frame reversed; answers ``end`` with ``done``.
+    ``handshake`` refuses the upgrade with an HTTP response; ``on_config``
+    answers the config with a refusal instead of ``ready``; ``on_audio``
+    answers the first audio message with its echo and then a refusal.
     """
 
     def __init__(self) -> None:
-        self.mode = "ok"
+        self.handshake: tuple[int, dict[str, str]] | None = None
+        self.on_config: _Refusal | None = None
+        self.on_audio: _Refusal | None = None
         self.config: dict | None = None
         self.path: str | None = None
         self.received: list[bytes] = []
         self.disconnected = threading.Event()
+
+    def process_request(self, connection: Any, request: Any) -> Any:
+        if self.handshake is None:
+            return None
+        status, headers = self.handshake
+        response = connection.respond(status, json.dumps({"error": "refused"}))
+        for name, value in headers.items():
+            response.headers[name] = value
+        self.disconnected.set()
+        return response
 
     def handler(self, ws: Any) -> None:
         try:
@@ -385,16 +470,18 @@ class _Server:
         finally:
             self.disconnected.set()
 
+    @staticmethod
+    def _refuse(ws: Any, refusal: _Refusal) -> None:
+        frame, close_code = refusal
+        if frame is not None:
+            ws.send(json.dumps(frame))
+        ws.close(close_code)
+
     def _serve(self, ws: Any) -> None:
         self.path = ws.request.path
         self.config = json.loads(ws.recv())
-        if self.mode == "reject_config":
-            error = {"type": "error", "code": "VALIDATION_ERROR", "message": "bad rate"}
-            ws.send(json.dumps(error))
-            ws.close(4400)
-            return
-        if self.mode == "busy":
-            ws.close(4429, "busy")
+        if self.on_config is not None:
+            self._refuse(ws, self.on_config)
             return
         ws.send(
             json.dumps(
@@ -405,14 +492,8 @@ class _Server:
             if isinstance(message, bytes):
                 self.received.append(message)
                 ws.send(message[::-1])
-                if self.mode == "fail_mid":
-                    error = {
-                        "type": "error",
-                        "code": "MODEL_UNAVAILABLE",
-                        "message": "backend failed",
-                    }
-                    ws.send(json.dumps(error))
-                    ws.close(1011)
+                if self.on_audio is not None:
+                    self._refuse(ws, self.on_audio)
                     return
             elif json.loads(message).get("type") == "end":
                 ws.send(json.dumps({"type": "done", "duration_s": 0.25}))
@@ -426,7 +507,13 @@ class _Server:
 @pytest.fixture
 def ws_env() -> Iterator[tuple[_Server, KugelAudio]]:
     server = _Server()
-    ws_server = serve(server.handler, "127.0.0.1", 0, compression=None)
+    ws_server = serve(
+        server.handler,
+        "127.0.0.1",
+        0,
+        compression=None,
+        process_request=server.process_request,
+    )
     thread = threading.Thread(target=ws_server.serve_forever, daemon=True)
     thread.start()
     port = ws_server.socket.getsockname()[1]
@@ -538,33 +625,137 @@ def test_stream_sync_rejects_async_iterable_in_sync_stream():
     asyncio.run(source.aclose())
 
 
-@pytest.mark.parametrize(
-    ("mode", "expected"),
-    [("reject_config", ValidationError), ("busy", KugelAudioConnectionError)],
-)
-def test_stream_sync_handshake_error_raises_before_first_chunk(ws_env, mode, expected):
+_RATE_LIMITED_FRAME = _frame(429, "RATE_LIMITED", _RPM, retry_after=7)
+
+# (server setup, expected class, status_code, retry_after, request_id).
+_REFUSALS: dict[
+    str, tuple[dict, type[KugelAudioError], int, int | None, str | None]
+] = {
+    "handshake-429": (
+        {"handshake": (429, {"Retry-After": "7", "X-Request-Id": "req-hs"})},
+        RateLimitError,
+        429,
+        7,
+        "req-hs",
+    ),
+    "handshake-429-concurrency": (
+        {"handshake": (429, {"X-Request-Id": "req-hs"})},
+        RateLimitError,
+        429,
+        None,
+        "req-hs",
+    ),
+    "handshake-402": (
+        {"handshake": (402, {})},
+        InsufficientCreditsError,
+        402,
+        None,
+        None,
+    ),
+    "handshake-403": ({"handshake": (403, {})}, AuthenticationError, 401, None, None),
+    "handshake-503": (
+        {"handshake": (503, {"Retry-After": "5"})},
+        KugelAudioConnectionError,
+        503,
+        5,
+        None,
+    ),
+    "frame-then-4029": (
+        {"on_config": (_RATE_LIMITED_FRAME, 4029)},
+        RateLimitError,
+        429,
+        7,
+        "req-ws",
+    ),
+    "close-4029-only": ({"on_config": (None, 4029)}, RateLimitError, 429, None, None),
+    "frame-then-4000": (
+        {"on_config": (_frame(400, "VALIDATION_ERROR", "bad rate"), 4000)},
+        ValidationError,
+        400,
+        None,
+        "req-ws",
+    ),
+    "close-4001": ({"on_config": (None, 4001)}, AuthenticationError, 401, None, None),
+    "close-4003": (
+        {"on_config": (None, 4003)},
+        InsufficientCreditsError,
+        402,
+        None,
+        None,
+    ),
+    "close-4500": (
+        {"on_config": (None, 4500)},
+        KugelAudioConnectionError,
+        503,
+        None,
+        None,
+    ),
+    "close-4000": (
+        {"on_config": (None, 4000)},
+        KugelAudioConnectionError,
+        503,
+        None,
+        None,
+    ),
+    "close-1011": (
+        {"on_config": (None, 1011)},
+        KugelAudioConnectionError,
+        503,
+        None,
+        None,
+    ),
+}
+
+
+def _check_refusal(err: KugelAudioError, case: str) -> None:
+    _, expected, status, retry_after, request_id = _REFUSALS[case]
+    assert type(err) is expected
+    assert err.status_code == status
+    assert err.retry_after == retry_after
+    assert err.request_id == request_id
+
+
+@pytest.mark.parametrize("case", list(_REFUSALS))
+def test_stream_sync_refusal_raises_typed_error_before_first_chunk(ws_env, case):
     server, client = ws_env
-    server.mode = mode
+    for name, value in _REFUSALS[case][0].items():
+        setattr(server, name, value)
     received: list[bytes] = []
-    with pytest.raises(expected):
+    with pytest.raises(KugelAudioError) as err:
         for chunk in client.enhance.stream_sync(
             [b"\x00\x00"], model=MODEL, sample_rate=16000
         ):
             received.append(chunk)  # noqa: PERF402 - keep chunks seen before the error
+    _check_refusal(err.value, case)
     assert received == []
     assert server.received == []
     _assert_cleaned_up(server)
 
 
-def test_stream_sync_error_frame_mid_session_raises(ws_env):
+@pytest.mark.parametrize(
+    ("refusal", "expected", "retry_after"),
+    [
+        ((_RATE_LIMITED_FRAME, 4029), RateLimitError, 7),
+        ((None, 4029), RateLimitError, None),
+        (
+            (_frame(503, "MODEL_UNAVAILABLE", "backend failed"), 4500),
+            KugelAudioConnectionError,
+            None,
+        ),
+        ((None, 4003), InsufficientCreditsError, None),
+    ],
+    ids=["frame-then-4029", "close-4029-only", "frame-then-4500", "close-4003"],
+)
+def test_stream_sync_refusal_mid_session_raises(ws_env, refusal, expected, retry_after):
     server, client = ws_env
-    server.mode = "fail_mid"
+    server.on_audio = refusal
     received: list[bytes] = []
-    with pytest.raises(KugelAudioConnectionError, match="backend failed"):
+    with pytest.raises(expected) as err:
         for chunk in client.enhance.stream_sync(
             _endless(), model=MODEL, sample_rate=16000
         ):
             received.append(chunk)  # noqa: PERF402 - keep chunks seen before the error
+    assert err.value.retry_after == retry_after
     assert received == [b"\x02\x01"]
     _assert_cleaned_up(server)
 
@@ -688,31 +879,44 @@ async def test_stream_async_iterable_with_speaker(async_env, files):
     assert base64.b64decode(server.config["speaker_wav_b64"]) == SPEAKER_WAV
 
 
-@pytest.mark.parametrize(
-    ("mode", "expected"),
-    [("reject_config", ValidationError), ("busy", KugelAudioConnectionError)],
-)
-async def test_stream_handshake_error(async_env, mode, expected):
+@pytest.mark.parametrize("case", list(_REFUSALS))
+async def test_stream_refusal_raises_typed_error(async_env, case):
     server, client = async_env
-    server.mode = mode
+    for name, value in _REFUSALS[case][0].items():
+        setattr(server, name, value)
     received: list[bytes] = []
-    with pytest.raises(expected):
+    with pytest.raises(KugelAudioError) as err:
         async for chunk in client.enhance.stream(
             [b"\x00\x00"], model=MODEL, sample_rate=16000
         ):
             received.append(chunk)
+    _check_refusal(err.value, case)
     assert received == []
 
 
-async def test_stream_error_frame_mid_session(async_env):
+@pytest.mark.parametrize(
+    ("refusal", "expected", "retry_after"),
+    [
+        ((_RATE_LIMITED_FRAME, 4029), RateLimitError, 7),
+        ((None, 4029), RateLimitError, None),
+        (
+            (_frame(503, "MODEL_UNAVAILABLE", "backend failed"), 4500),
+            KugelAudioConnectionError,
+            None,
+        ),
+    ],
+    ids=["frame-then-4029", "close-4029-only", "frame-then-4500"],
+)
+async def test_stream_refusal_mid_session(async_env, refusal, expected, retry_after):
     server, client = async_env
-    server.mode = "fail_mid"
+    server.on_audio = refusal
     received: list[bytes] = []
-    with pytest.raises(KugelAudioConnectionError, match="backend failed"):
+    with pytest.raises(expected) as err:
         async for chunk in client.enhance.stream(
             _endless_async(), model=MODEL, sample_rate=16000
         ):
             received.append(chunk)
+    assert err.value.retry_after == retry_after
     assert received == [b"\x02\x01"]
 
 
@@ -783,21 +987,3 @@ async def test_empty_model_rejected_before_any_request(model):
     with pytest.raises(ValidationError, match="model"):
         enhance.stream(audio, model=model)
     assert requests == []
-
-
-@pytest.mark.parametrize(
-    ("code", "error_class", "message"),
-    [
-        (4400, ValidationError, "rejected the request"),
-        (4401, AuthenticationError, "API key"),
-        (4402, InsufficientCreditsError, "out of credits"),
-        (4408, KugelAudioConnectionError, "30 s without audio"),
-        (4429, KugelAudioConnectionError, "busy"),
-        (4503, KugelAudioConnectionError, "temporarily unavailable"),
-        (1011, KugelAudioConnectionError, "closed by server"),
-    ],
-)
-def test_close_codes_map_to_typed_errors(code, error_class, message):
-    error = _classify_close(code, "why")
-    assert isinstance(error, error_class)
-    assert message in str(error)

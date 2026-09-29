@@ -28,6 +28,11 @@ Example usage:
 
     # Use in a Pipecat pipeline
     pipeline = Pipeline([..., tts, ...])
+
+Speech enhancement (noise removal) as an input audio filter:
+    from kugelaudio.pipecat import KugelAudioEnhanceFilter
+
+    params = TransportParams(audio_in_filter=KugelAudioEnhanceFilter())
 """
 
 from __future__ import annotations
@@ -36,6 +41,9 @@ from importlib.util import find_spec
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from kugelaudio.pipecat.enhance import (
+        KugelAudioEnhanceFilter as KugelAudioEnhanceFilter,
+    )
     from kugelaudio.pipecat.tts import KugelAudioTTSService as KugelAudioTTSService
     from kugelaudio.pipecat.models import TTSModels as TTSModels
     from kugelaudio.pipecat.turn import KugelTurnStopStrategy as KugelTurnStopStrategy
@@ -63,6 +71,12 @@ def __getattr__(name: str):
         from kugelaudio.pipecat.tts import KugelAudioTTSService
 
         return KugelAudioTTSService
+
+    if name == "KugelAudioEnhanceFilter":
+        _check_pipecat_installed()
+        from kugelaudio.pipecat.enhance import KugelAudioEnhanceFilter
+
+        return KugelAudioEnhanceFilter
 
     if name == "TTSModels":
         from kugelaudio.pipecat.models import TTSModels
@@ -103,6 +117,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "KugelAudioTTSService",
+    "KugelAudioEnhanceFilter",
     "TTSModels",
     "KugelTurnStopStrategy",
     "DEFAULT_MODEL",

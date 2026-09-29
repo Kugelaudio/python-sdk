@@ -29,8 +29,9 @@ import httpx
 from kugelaudio._sdk_metadata import sdk_query_string
 from kugelaudio.audio import Audio, AudioStream
 from kugelaudio.exceptions import (
-    AuthenticationError,
-    InsufficientCreditsError,
+    ConnectionError as KugelAudioConnectionError,
+)
+from kugelaudio.exceptions import (
     KugelAudioError,
     ValidationError,
     classify_http_response,
@@ -38,9 +39,6 @@ from kugelaudio.exceptions import (
     classify_ws_frame,
     classify_ws_handshake_error,
     ws_handshake_error_types,
-)
-from kugelaudio.exceptions import (
-    ConnectionError as KugelAudioConnectionError,
 )
 
 if TYPE_CHECKING:
@@ -54,14 +52,6 @@ _ENHANCE_PATH = "/v1/audio/enhance"
 _ENHANCE_STREAM_PATH = "/v1/audio/enhance/stream"
 _SENDER_THREAD_NAME = "kugelaudio-enhance-send"
 _SENDER_JOIN_TIMEOUT_S = 5.0
-
-# Close codes the enhancement stream uses (see the public API docs).
-_WS_CLOSE_INVALID = 4400
-_WS_CLOSE_UNAUTHORIZED = 4401
-_WS_CLOSE_INSUFFICIENT_CREDITS = 4402
-_WS_CLOSE_IDLE = 4408
-_WS_CLOSE_BUSY = 4429
-_WS_CLOSE_UNAVAILABLE = 4503
 
 _MultipartFields = list[tuple[str, tuple[Optional[str], Any, str]]]
 
@@ -214,39 +204,10 @@ def _split(chunk: Any, max_bytes: int) -> Iterator[bytes]:
         yield data[start : start + max_bytes]
 
 
-def _classify_error_frame(data: dict) -> KugelAudioError:
-    """Map a stream ``{"type":"error","code","message"}`` frame."""
-    return classify_ws_frame(
-        {"error_code": data.get("code"), "error": data.get("message")}
-    )
-
-
-def _classify_close(code: int | None, reason: str | None) -> KugelAudioError:
-    detail = f" ({reason})" if reason else ""
-    if code == _WS_CLOSE_UNAUTHORIZED:
-        return AuthenticationError()
-    if code == _WS_CLOSE_INSUFFICIENT_CREDITS:
-        return InsufficientCreditsError()
-    if code == _WS_CLOSE_INVALID:
-        return ValidationError(f"The enhancement stream rejected the request{detail}.")
-    if code == _WS_CLOSE_BUSY:
-        return KugelAudioConnectionError(
-            f"Speech enhancement is busy{detail}. Retry shortly."
-        )
-    if code == _WS_CLOSE_IDLE:
-        return KugelAudioConnectionError(
-            f"The enhancement stream closed after 30 s without audio{detail}."
-        )
-    if code == _WS_CLOSE_UNAVAILABLE:
-        return KugelAudioConnectionError(
-            f"Speech enhancement is temporarily unavailable{detail}. Retry shortly."
-        )
-    return classify_ws_close(code, reason)
-
-
 def _closed_error(e: Any) -> KugelAudioError:
+    """The typed error for a server close, through the same route as TTS."""
     rcvd = getattr(e, "rcvd", None)
-    return _classify_close(
+    return classify_ws_close(
         rcvd.code if rcvd is not None else None,
         rcvd.reason if rcvd is not None else None,
     )
@@ -262,7 +223,7 @@ def _handshake_error(e: Exception) -> KugelAudioError:
 def _check_ready(message: Any) -> None:
     data = json.loads(message) if isinstance(message, str) else {}
     if data.get("type") == "error":
-        raise _classify_error_frame(data)
+        raise classify_ws_frame(data)
     if data.get("type") != "ready":
         raise KugelAudioConnectionError(
             "Unexpected first message from the enhancement stream."
@@ -273,7 +234,7 @@ def _is_done(message: str) -> bool:
     """Handle a text frame: raise on ``error``, return True on ``done``."""
     data = json.loads(message)
     if data.get("type") == "error":
-        raise _classify_error_frame(data)
+        raise classify_ws_frame(data)
     return data.get("type") == "done"
 
 

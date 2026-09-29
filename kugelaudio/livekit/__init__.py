@@ -34,6 +34,11 @@ Or register as a LiveKit plugin:
 
     # Now available as livekit.plugins.kugelaudio
     from livekit.plugins import kugelaudio
+
+Speech enhancement (noise removal) on the participant's audio:
+    from kugelaudio.livekit import enhancement
+
+    room_io.AudioInputOptions(noise_cancellation=enhancement())
 """
 
 from __future__ import annotations
@@ -46,6 +51,10 @@ if TYPE_CHECKING:
         TTS as TTS,
         ChunkedStream as ChunkedStream,
         SynthesizeStream as SynthesizeStream,
+    )
+    from kugelaudio.livekit.enhance import (
+        EnhanceFrameProcessor as EnhanceFrameProcessor,
+        enhancement as enhancement,
     )
     from kugelaudio.livekit.models import TTSModels as TTSModels
     from kugelaudio.livekit.turn import KugelTurnBridge as KugelTurnBridge
@@ -76,6 +85,12 @@ def __getattr__(name: str):
             "ChunkedStream": ChunkedStream,
             "SynthesizeStream": SynthesizeStream,
         }[name]
+
+    if name in ("EnhanceFrameProcessor", "enhancement"):
+        _check_livekit_installed()
+        from kugelaudio.livekit import enhance
+
+        return getattr(enhance, name)
 
     if name == "TTSModels":
         from kugelaudio.livekit.models import TTSModels
@@ -129,6 +144,8 @@ __all__ = [
     "TTS",
     "ChunkedStream",
     "SynthesizeStream",
+    "EnhanceFrameProcessor",
+    "enhancement",
     "TTSModels",
     "KugelTurnBridge",
     "DEFAULT_MODEL",
