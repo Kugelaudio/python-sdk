@@ -30,7 +30,9 @@ Example usage:
         pass
 """
 
+from kugelaudio.audio import Audio, AudioStream, load_audio, load_audio_stream
 from kugelaudio.client import KugelAudio
+from kugelaudio.enhance import EnhancedAudio, EnhanceResource
 from kugelaudio.exceptions import (
     AuthenticationError,
     InsufficientCreditsError,
@@ -72,13 +74,17 @@ from kugelaudio.streaming import (
 
 __version__ = "2.1.0"
 __all__ = [
+    "Audio",
     "AudioChunk",
     "AudioResponse",
+    "AudioStream",
     "AuthenticationError",
     "BulkReplaceResult",
     "Dictionary",
     "DictionaryEntry",
     "DictionaryEntryList",
+    "EnhanceResource",
+    "EnhancedAudio",
     "GeneratedSample",
     "GenerateRequest",
     "InsufficientCreditsError",
@@ -103,4 +109,6 @@ __all__ = [
     "VoiceReference",
     "WordAlternatives",
     "WordTimestamp",
+    "load_audio",
+    "load_audio_stream",
 ]

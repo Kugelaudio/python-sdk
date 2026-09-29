@@ -64,6 +64,7 @@ from kugelaudio._diagnostics import (
     Operation,
 )
 from kugelaudio._sdk_metadata import sdk_headers, sdk_query_string
+from kugelaudio.enhance import EnhanceResource
 from kugelaudio.models import (
     AudioChunk,
     AudioResponse,
@@ -1907,6 +1908,7 @@ class KugelAudio:
         self.dictionaries = DictionariesResource(self)
         self.asr = ASRResource(self)
         self.tts = TTSResource(self)
+        self.enhance = EnhanceResource(self)
 
         self._http_client = httpx.Client(
             timeout=timeout,

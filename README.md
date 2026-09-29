@@ -723,6 +723,53 @@ tts = KugelAudioTTSService(
 )
 ```
 
+## Speech Enhancement
+
+Enhancement removes background noise. Pass `speaker=` (a clean 2–8 s sample of
+one voice) to keep only that voice and remove every other voice and sound.
+`model` is required on every call. Audio is loaded explicitly: `load_audio` for
+a whole recording, `load_audio_stream` for real-time streaming.
+
+```python
+from kugelaudio import KugelAudio, load_audio, load_audio_stream
+
+client = KugelAudio(api_key="YOUR_API_KEY")
+
+audio = load_audio("meeting.wav")
+speaker = load_audio("speaker.wav")
+result = await client.enhance.generate(audio, model="clarity-1", speaker=speaker)
+result.save("clean.wav")
+
+stream_in = load_audio_stream("meeting.wav")
+async for chunk in client.enhance.stream(stream_in, model="clarity-1", speaker=speaker):
+    print(len(chunk), "bytes")  # enhanced 16-bit mono PCM, 24 kHz, as it arrives
+```
+
+For scripts without asyncio, `generate_sync(...)` and `stream_sync(...)` take the same arguments.
+
+Leave out `speaker` to only remove noise:
+`await client.enhance.generate(audio, model="clarity-1")`.
+
+`load_audio` accepts any supported WAV (16/24/32-bit PCM or float, mono or
+stereo, 8–48 kHz, up to 300 s) as a path or bytes. The result is mono 16-bit PCM
+at 24 kHz with the same duration: `result.audio` (raw PCM bytes), `result.wav`
+(WAV bytes), `result.duration` (seconds), `result.sample_rate` (24000).
+
+`load_audio_stream` reads a 16-bit PCM WAV (stereo is mixed down to mono) and
+exposes `.sample_rate` and `.duration`. For live audio, pass any iterable or
+async iterable of raw 16-bit mono PCM chunks (up to 1 s each) with its
+`sample_rate`:
+
+```python
+async for chunk in client.enhance.stream(mic(), model="clarity-1", sample_rate=16000):
+    play(chunk)
+```
+
+Input is sent in the background while you iterate, and iteration ends once the
+last input has been enhanced. Breaking out of the loop closes the connection.
+Errors raise the usual SDK exceptions (`ValidationError`, `AuthenticationError`,
+`KugelAudioConnectionError`, …).
+
 ## Error Handling
 
 ```python
