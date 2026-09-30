@@ -96,6 +96,51 @@ class TestASRResource:
         assert request["url"].endswith("/v1/audio/transcriptions")
         assert ("model", (None, "luchs-1", "text/plain")) in request["files"]
 
+    def test_transcribe_sends_one_form_field_per_boosted_phrase(self):
+        client = KugelAudio(api_key="test_key")
+        client._http_client.request = MagicMock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "text": "Kargo",
+                    "transcript": "Kargo",
+                    "language": "en",
+                    "duration_s": 1.0,
+                    "model": "luchs-1",
+                    "word_alternatives": [],
+                },
+            )
+        )
+
+        client.asr.transcribe(b"RIFFdata", boosted_phrases=["Kargo", "Acme, Inc."])
+
+        files = client._http_client.request.call_args.kwargs["files"]
+        assert [value for name, value in files if name == "boosted_phrases"] == [
+            (None, "Kargo", "text/plain"),
+            (None, "Acme, Inc.", "text/plain"),
+        ]
+
+    def test_transcribe_without_phrases_sends_no_phrase_field(self):
+        client = KugelAudio(api_key="test_key")
+        client._http_client.request = MagicMock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "text": "hi",
+                    "transcript": "hi",
+                    "language": "en",
+                    "duration_s": 1.0,
+                    "model": "luchs-1",
+                    "word_alternatives": [],
+                },
+            )
+        )
+
+        client.asr.transcribe(b"RIFFdata")
+
+        files = client._http_client.request.call_args.kwargs["files"]
+        assert "boosted_phrases" not in [name for name, _ in files]
+
     def test_transcribe_rejects_unknown_model_before_network(self):
         client = KugelAudio(api_key="test_key")
         client._http_client.request = MagicMock()

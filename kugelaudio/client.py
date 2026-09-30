@@ -226,7 +226,15 @@ class ASRResource:
         content_type: str = "audio/wav",
         language: Optional[str] = None,
         model: str = PUBLIC_ASR_MODEL_ID,
+        boosted_phrases: Optional[List[str]] = None,
     ) -> TranscriptionResponse:
+        """Transcribe one complete recording.
+
+        Args:
+            boosted_phrases: Your vocabulary for this request: names, brands
+                and domain terms to spell as written. The server refuses a
+                list over its limits instead of shortening it.
+        """
         if not audio:
             raise ValidationError("ASR audio must not be empty")
         if model != PUBLIC_ASR_MODEL_ID:
@@ -239,6 +247,8 @@ class ASRResource:
         ]
         if language is not None:
             fields.append(("language", (None, language, "text/plain")))
+        for phrase in boosted_phrases or []:
+            fields.append(("boosted_phrases", (None, phrase, "text/plain")))
         response = self._client._request_multipart(
             "POST", "/v1/audio/transcriptions", fields
         )
