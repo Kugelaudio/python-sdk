@@ -111,7 +111,7 @@ def _http_client(handler: Handler) -> KugelAudio:
     client._http_client = httpx.Client(
         transport=transport, headers=client._http_client.headers
     )
-    client.enhance._async_transport = transport
+    client._async_transport = transport
     return client
 
 

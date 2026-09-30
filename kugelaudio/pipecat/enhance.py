@@ -121,6 +121,7 @@ class KugelAudioEnhanceFilter(BaseAudioFilter):
             sample_rate, max_delay_s=self._max_backlog_s + _PLAYOUT_HEADROOM_S
         )
         self._resampler = _stream_resampler()
+        self._enhancer.prewarm()
 
     async def stop(self) -> None:
         if self._enhancer is not None:

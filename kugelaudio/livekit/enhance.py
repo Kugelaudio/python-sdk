@@ -86,6 +86,9 @@ class EnhanceFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._enabled = True
         self._playout: PlayoutBuffer | None = None
         self._resampler: rtc.AudioResampler | None = None
+        # Built inside the agent's entrypoint the loop is running; otherwise
+        # this is skipped and attaching to the track warms instead.
+        self._enhancer.prewarm()
 
     @property
     def enhancer(self) -> LiveEnhancer:
@@ -103,6 +106,13 @@ class EnhanceFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             # buffer cannot be handed back; drop it with the stream.
             self._reset()
         self._enabled = value
+
+    def _on_stream_info_updated(
+        self, *, room_name: str, participant_identity: str, publication_sid: str
+    ) -> None:
+        # Attached to a participant's track: the first frames are close, and a
+        # connection warmed at construction may have gone idle since.
+        self._enhancer.prewarm()
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
         if frame.num_channels != 1:

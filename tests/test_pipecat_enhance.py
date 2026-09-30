@@ -124,3 +124,13 @@ async def test_disable_drains_then_passes_through_and_enable_reopens() -> None:
     assert audio_filter.enhancer.state is LiveEnhancerState.LIVE
     await audio_filter.stop()
     assert second.closed
+
+
+async def test_start_prewarms_the_connection() -> None:
+    audio_filter = make_filter(FakeServer())
+    client = audio_filter._client
+    assert client.enhance.prewarms == 0
+    await audio_filter.start(RATE)
+    await settle()
+    assert client.enhance.prewarms == 1
+    await audio_filter.stop()

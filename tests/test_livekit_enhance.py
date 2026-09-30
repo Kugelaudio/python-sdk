@@ -130,3 +130,22 @@ async def test_disabling_closes_the_stream() -> None:
     assert not processor.enabled
     assert server.closed
     assert processor.enhancer.state is LiveEnhancerState.IDLE
+
+
+async def test_prewarms_at_construction_and_on_attach() -> None:
+    processor = make_processor(FakeServer())
+    client = processor.enhancer._client
+    await settle()
+    assert client.enhance.prewarms == 1
+
+    processor._on_stream_info_updated(
+        room_name="room", participant_identity="caller", publication_sid="PA_1"
+    )
+    await settle()
+    assert client.enhance.prewarms == 2
+    processor._close()
+
+
+def test_construction_outside_a_loop_defers_prewarm_to_attach() -> None:
+    processor = make_processor(FakeServer())
+    assert processor.enhancer._client.enhance.prewarms == 0

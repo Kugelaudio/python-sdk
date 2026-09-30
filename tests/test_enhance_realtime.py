@@ -86,6 +86,16 @@ class FakeEnhance:
     def __init__(self, servers: list[FakeServer]) -> None:
         self.servers = servers
         self.calls: list[dict[str, object]] = []
+        self.prewarms = 0
+        self.prewarm_error: Exception | None = None
+        self.prewarm_hangs = False
+
+    async def prewarm(self) -> None:
+        self.prewarms += 1
+        if self.prewarm_hangs:
+            await asyncio.Event().wait()
+        if self.prewarm_error is not None:
+            raise self.prewarm_error
 
     def stream(
         self,
@@ -478,3 +488,46 @@ async def test_aclose_waits_for_replaced_streams_still_closing() -> None:
     assert len(client.enhance.calls) == 2
     await enhancer.aclose()
     assert first.cleanup_done
+
+
+# ------------------------------------------------------------------ prewarm
+
+
+async def test_prewarm_warms_in_the_background_and_audio_still_passes_through() -> None:
+    enhancer, client = make(FakeServer())
+    client.enhance.prewarm_hangs = True
+
+    enhancer.prewarm()
+    enhancer.prewarm()  # a no-op while the first is still running
+    enhancer.push(FRAME, RATE)
+    assert enhancer.pull() == [LiveSegment(FRAME, RATE, enhanced=False)]
+    await settle()
+    assert client.enhance.prewarms == 1
+    assert enhancer.state is LiveEnhancerState.LIVE
+
+    await asyncio.wait_for(enhancer.aclose(), 1)  # cancels the hanging prewarm
+
+
+async def test_prewarm_again_after_the_first_finished() -> None:
+    enhancer, client = make()
+    enhancer.prewarm()
+    await settle()
+    enhancer.prewarm()
+    await settle()
+    assert client.enhance.prewarms == 2
+
+
+def test_prewarm_outside_an_event_loop_is_skipped() -> None:
+    enhancer, client = make()
+    enhancer.prewarm()
+    assert client.enhance.prewarms == 0
+
+
+async def test_prewarm_bug_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
+    enhancer, client = make()
+    client.enhance.prewarm_error = RuntimeError("boom")
+    with caplog.at_level(logging.WARNING, logger="kugelaudio.enhance"):
+        enhancer.prewarm()
+        await settle()
+    assert "Prewarming the enhancement connection failed" in caplog.text
+    assert enhancer.state is LiveEnhancerState.IDLE

@@ -11,6 +11,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import os
 import threading
 import wave
@@ -43,6 +44,8 @@ from kugelaudio.exceptions import (
 
 if TYPE_CHECKING:
     from kugelaudio.client import KugelAudio
+
+logger = logging.getLogger("kugelaudio.enhance")
 
 TASK_NOISE_REMOVAL = "noise_removal"
 TASK_TARGET_SPEAKER_EXTRACTION = "target_speaker_extraction"
@@ -157,6 +160,18 @@ def _transport_error(e: httpx.HTTPError, url: str, timeout: float) -> KugelAudio
         )
     return KugelAudioConnectionError(
         f"Could not reach KugelAudio at {url}: {e}. Check network connectivity."
+    )
+
+
+def _log_prewarm_failure(e: httpx.TransportError, url: str) -> None:
+    # KEEP-JUSTIFIED: warming is an optimisation; the first real request
+    # connects on its own and raises its own typed error if the network is down.
+    logger.warning(
+        "Could not prewarm the enhancement connection to %s (%s: %s); the first "
+        "request will connect instead.",
+        url,
+        type(e).__name__,
+        e,
     )
 
 
@@ -392,8 +407,6 @@ class EnhanceResource:
 
     def __init__(self, client: KugelAudio):
         self._client = client
-        # Test hook: transport for the per-call async HTTP client.
-        self._async_transport: httpx.AsyncBaseTransport | None = None
 
     def _url(self) -> str:
         return urljoin(self._client._api_url + "/", _ENHANCE_PATH.lstrip("/"))
@@ -447,12 +460,7 @@ class EnhanceResource:
         fields = _multipart(audio, model, speaker)
         url = self._url()
         try:
-            async with httpx.AsyncClient(
-                timeout=self._client._timeout,
-                headers=self._client._http_client.headers,
-                transport=self._async_transport,
-            ) as http:
-                response = await http.post(url, files=fields)
+            response = await self._client._async_http.get().post(url, files=fields)
         except httpx.HTTPError as e:
             raise _transport_error(e, url, self._client._timeout) from e
         return _parse_response(response)
@@ -477,6 +485,40 @@ class EnhanceResource:
         except httpx.HTTPError as e:
             raise _transport_error(e, url, self._client._timeout) from e
         return _parse_response(response)
+
+    async def prewarm(self) -> None:
+        """Open the connection :meth:`generate` uses, so the first request
+        skips the connection setup (TCP and TLS).
+
+        Sends one ``GET`` to the enhancement path, which only accepts ``POST``:
+        the server refuses it (405) before authentication or any processing,
+        so it is not billed and does not count against rate limits.
+        Safe to call any number of times. An idle connection is kept for up to
+        50 s, so call it shortly before the first request. A network error is
+        logged and not raised: the first real request then connects as usual.
+
+        Example:
+            await client.enhance.prewarm()
+            result = await client.enhance.generate(load_audio("call.wav"), model="clarity-1")
+        """
+        url = self._url()
+        try:
+            await self._client._async_http.get().get(url)
+        except httpx.TransportError as e:
+            _log_prewarm_failure(e, url)
+
+    def prewarm_sync(self) -> None:
+        """Blocking :meth:`prewarm`: opens the connection :meth:`generate_sync` uses.
+
+        Example:
+            client.enhance.prewarm_sync()
+            result = client.enhance.generate_sync(load_audio("call.wav"), model="clarity-1")
+        """
+        url = self._url()
+        try:
+            self._client._http_client.get(url)
+        except httpx.TransportError as e:
+            _log_prewarm_failure(e, url)
 
     def stream(
         self,

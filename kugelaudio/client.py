@@ -64,6 +64,7 @@ from kugelaudio._diagnostics import (
     Operation,
 )
 from kugelaudio._sdk_metadata import sdk_headers, sdk_query_string
+from kugelaudio._http import HTTP_LIMITS, SharedAsyncHttp
 from kugelaudio.enhance import EnhanceResource
 from kugelaudio.models import (
     AudioChunk,
@@ -1913,7 +1914,11 @@ class KugelAudio:
         self._http_client = httpx.Client(
             timeout=timeout,
             headers={**_auth_headers(clean_key), **sdk_headers()},
+            limits=HTTP_LIMITS,
         )
+        # Test hook: transport for the shared async HTTP client.
+        self._async_transport: httpx.AsyncBaseTransport | None = None
+        self._async_http = SharedAsyncHttp(self._new_async_http_client)
 
         # Note on auto_connect:
         # - For ASYNC usage: Use `await KugelAudio.create()` to get a pre-connected client
@@ -2094,9 +2099,19 @@ class KugelAudio:
                 "Check network connectivity."
             ) from e
 
+    def _new_async_http_client(self) -> httpx.AsyncClient:
+        """A keep-alive async twin of ``_http_client`` (see :class:`SharedAsyncHttp`)."""
+        return httpx.AsyncClient(
+            timeout=self._timeout,
+            headers=self._http_client.headers,
+            transport=self._async_transport,
+            limits=HTTP_LIMITS,
+        )
+
     def close(self) -> None:
         """Close the client and release resources."""
         self._http_client.close()
+        self._async_http.close()
         self._diagnostics.close()
         if self.tts._ws_connection is not None:
             try:
@@ -2119,6 +2134,7 @@ class KugelAudio:
     async def aclose(self) -> None:
         """Close the client asynchronously."""
         self._http_client.close()
+        await self._async_http.aclose()
         if hasattr(self.tts, "_close_ws_connection"):
             await self.tts._close_ws_connection()
         # The reporter's bounded (<=1 s) wait for its delivery thread runs off

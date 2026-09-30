@@ -206,6 +206,7 @@ class LiveEnhancer:
         # Every stream task still running, including ones _end_stream already
         # cancelled that are closing their socket, so aclose() can wait for all.
         self._tasks: set[asyncio.Task[None]] = set()
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
     def state(self) -> LiveEnhancerState:
@@ -279,6 +280,25 @@ class LiveEnhancer:
                 ),
             )
 
+    def prewarm(self) -> None:
+        """Warm the connection to the enhancement endpoint in the background.
+
+        Never waits and never raises: audio pushed meanwhile passes through as
+        before. A no-op while a prewarm is still running, and outside a running
+        event loop (the adapters call it again once the pipeline runs).
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug("Enhancement prewarm skipped: no running event loop yet.")
+            return
+        if self._prewarm_task is not None and not self._prewarm_task.done():
+            return
+        task = loop.create_task(self._prewarm())
+        self._prewarm_task = task
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
     def pull(self) -> list[LiveSegment]:
         """Every output segment since the last pull, in timeline order."""
         output, self._output = self._output, []
@@ -296,9 +316,12 @@ class LiveEnhancer:
             self._end_stream(self._stream, LiveEnhancerState.IDLE)
 
     def close(self) -> None:
-        """End the stream and drop any output not pulled yet."""
+        """End the stream, stop a running prewarm, and drop any output not
+        pulled yet."""
         self.pause()
         self._output = []
+        if self._prewarm_task is not None and not self._prewarm_task.done():
+            self._prewarm_task.cancel()
 
     async def aclose(self) -> None:
         """:meth:`close`, then wait until every connection this enhancer opened
@@ -309,6 +332,15 @@ class LiveEnhancer:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
     # ------------------------------------------------------------ internals
+
+    async def _prewarm(self) -> None:
+        try:
+            await self._client.enhance.prewarm()
+        except Exception:
+            # KEEP-JUSTIFIED: prewarm already logs network errors itself; anything
+            # else is a bug, logged with its traceback, and must not reach the
+            # audio path. The first stream connects on its own either way.
+            logger.warning("Prewarming the enhancement connection failed.", exc_info=True)
 
     def _pass_through(self, pcm: bytes, sample_rate: int) -> None:
         self._output.append(LiveSegment(pcm, sample_rate, enhanced=False))
