@@ -1,7 +1,8 @@
 """Tests for kugelaudio._enhance_live: the framework-free real-time enhancer.
 
-``client.enhance.stream`` is replaced by scripted fakes; nothing touches the
-network. The file name avoids the substring "live" on purpose: the
+``client.enhance.session()`` is replaced by a scripted fake whose streams are
+scripted servers; nothing touches the network (tests/test_enhance_session.py
+runs the enhancer on a real socket). The file name avoids the substring "live" on purpose: the
 python-sdk CI unit deselects ``-k "not live"``, which matches module names.
 """
 
@@ -82,20 +83,40 @@ class FakeServer:
             self.closed = True
 
 
+class FakeSession:
+    """Stands in for client.enhance.session(); streams go to the next server."""
+
+    def __init__(self, enhance: FakeEnhance) -> None:
+        self._enhance = enhance
+
+    async def connect(self) -> None:
+        enhance = self._enhance
+        enhance.connects += 1
+        if enhance.connect_hangs:
+            await asyncio.Event().wait()
+        if enhance.connect_error is not None:
+            raise enhance.connect_error
+
+    def stream(self, audio: AsyncIterator[bytes], **kwargs: object) -> AsyncIterator[bytes]:
+        return self._enhance.stream(audio, **kwargs)  # type: ignore[arg-type]
+
+    async def aclose(self) -> None:
+        self._enhance.session_closes += 1
+
+
 class FakeEnhance:
     def __init__(self, servers: list[FakeServer]) -> None:
         self.servers = servers
         self.calls: list[dict[str, object]] = []
-        self.prewarms = 0
-        self.prewarm_error: Exception | None = None
-        self.prewarm_hangs = False
+        self.sessions = 0
+        self.session_closes = 0
+        self.connects = 0
+        self.connect_error: Exception | None = None
+        self.connect_hangs = False
 
-    async def prewarm(self) -> None:
-        self.prewarms += 1
-        if self.prewarm_hangs:
-            await asyncio.Event().wait()
-        if self.prewarm_error is not None:
-            raise self.prewarm_error
+    def session(self) -> FakeSession:
+        self.sessions += 1
+        return FakeSession(self)
 
     def stream(
         self,
@@ -493,19 +514,21 @@ async def test_aclose_waits_for_replaced_streams_still_closing() -> None:
 # ------------------------------------------------------------------ prewarm
 
 
-async def test_prewarm_warms_in_the_background_and_audio_still_passes_through() -> None:
+async def test_prewarm_connects_in_the_background_and_audio_still_passes_through() -> None:
     enhancer, client = make(FakeServer())
-    client.enhance.prewarm_hangs = True
+    client.enhance.connect_hangs = True
 
     enhancer.prewarm()
     enhancer.prewarm()  # a no-op while the first is still running
     enhancer.push(FRAME, RATE)
     assert enhancer.pull() == [LiveSegment(FRAME, RATE, enhanced=False)]
     await settle()
-    assert client.enhance.prewarms == 1
+    assert client.enhance.connects == 1
+    assert client.enhance.sessions == 1  # the stream runs on the prewarmed session
     assert enhancer.state is LiveEnhancerState.LIVE
 
     await asyncio.wait_for(enhancer.aclose(), 1)  # cancels the hanging prewarm
+    assert client.enhance.session_closes == 1
 
 
 async def test_prewarm_again_after_the_first_finished() -> None:
@@ -514,20 +537,70 @@ async def test_prewarm_again_after_the_first_finished() -> None:
     await settle()
     enhancer.prewarm()
     await settle()
-    assert client.enhance.prewarms == 2
+    assert client.enhance.connects == 2
+    assert client.enhance.sessions == 1
 
 
 def test_prewarm_outside_an_event_loop_is_skipped() -> None:
     enhancer, client = make()
     enhancer.prewarm()
-    assert client.enhance.prewarms == 0
+    assert client.enhance.connects == 0
 
 
 async def test_prewarm_bug_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
     enhancer, client = make()
-    client.enhance.prewarm_error = RuntimeError("boom")
+    client.enhance.connect_error = RuntimeError("boom")
     with caplog.at_level(logging.WARNING, logger="kugelaudio.enhance"):
         enhancer.prewarm()
         await settle()
     assert "Prewarming the enhancement connection failed" in caplog.text
     assert enhancer.state is LiveEnhancerState.IDLE
+
+
+async def test_prewarm_network_failure_is_one_warning_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    enhancer, client = make()
+    client.enhance.connect_error = KugelAudioConnectionError("unreachable")
+    with caplog.at_level(logging.WARNING, logger="kugelaudio.enhance"):
+        enhancer.prewarm()
+        await settle()
+    (record,) = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert "Could not prewarm" in record.getMessage() and record.exc_info is None
+
+
+async def test_close_keeps_the_session_and_aclose_closes_it() -> None:
+    first, second = FakeServer(), FakeServer()
+    enhancer, client = make(first, second)
+    enhancer.push(FRAME, RATE)
+    await settle()
+    enhancer.close()  # e.g. LiveKit's track ended; the processor is reused
+    await settle()
+    assert first.closed and client.enhance.session_closes == 0
+    enhancer.push(FRAME, RATE)
+    await settle()
+    assert enhancer.state is LiveEnhancerState.LIVE
+    assert client.enhance.sessions == 1
+    await enhancer.aclose()
+    assert client.enhance.session_closes == 1 and second.closed
+
+
+@dataclass
+class NoDoneServer(FakeServer):
+    """Takes the end of the input but never answers it with done."""
+
+    async def run(self, audio: AsyncIterator[bytes], rate: int) -> AsyncIterator[bytes]:
+        async for out in super().run(audio, rate):
+            yield out
+        await asyncio.Event().wait()
+
+
+async def test_a_gracefully_ended_stream_without_done_is_cancelled_after_the_ready_timeout() -> None:
+    enhancer, _ = make(NoDoneServer(), FakeServer(), ready_timeout_s=0.05)
+    enhancer.push(FRAME, RATE)
+    await settle()
+    task = enhancer._stream.task if enhancer._stream else None
+    enhancer.pause()  # graceful: waits for done, which the server never sends
+    await asyncio.sleep(0.1)
+    assert task is not None and task.done()
+    await enhancer.aclose()

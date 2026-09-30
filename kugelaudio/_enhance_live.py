@@ -4,9 +4,12 @@ Framework-free core behind the LiveKit and Pipecat input filters. Both
 frameworks call their filter on the event loop once per audio frame and
 expect an answer at once, so nothing here ever waits on the network:
 
-* :class:`LiveEnhancer` feeds pushed audio to ``client.enhance.stream`` from
-  a background task and hands back, on :meth:`LiveEnhancer.pull`, whatever
-  has come back so far. Whenever the server is not delivering (connecting,
+* :class:`LiveEnhancer` feeds pushed audio to a stream on one warm
+  ``client.enhance.session()`` from a background task and hands back, on
+  :meth:`LiveEnhancer.pull`, whatever has come back so far. The session's
+  socket outlives each stream: a new sample rate, a rotation or the end of a
+  pause sends a new config on it, and it is reopened transparently when the
+  server closed it. Whenever the server is not delivering (connecting,
   reconnecting after a failure, disabled after a fatal one) the ORIGINAL
   audio is handed back instead, in order, so the caller's timeline never
   has a hole or a repeat.
@@ -26,7 +29,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -44,6 +47,7 @@ from kugelaudio.exceptions import ConnectionError as KugelAudioConnectionError
 if TYPE_CHECKING:
     from kugelaudio.audio import Audio
     from kugelaudio.client import KugelAudio
+    from kugelaudio.enhance import EnhanceSession
 
 logger = logging.getLogger("kugelaudio.enhance")
 
@@ -60,7 +64,8 @@ _TRANSIENT_ERRORS = (
     TimeoutError,
     asyncio.TimeoutError,
 )
-# The server ends a stream after 3600 s; rotate a minute before that.
+# The server caps a stream, and a session connection, at 3600 s; rotate a
+# minute before that (the session replaces its socket at the same age).
 _MAX_STREAM_S = 3540.0
 # Delay-line trimming: look at the lowest buffer level over this much output,
 # keep this much slack for jitter, and only drop 10 ms windows this quiet.
@@ -122,13 +127,16 @@ def client_from_options(
 
 
 class _Stream:
-    """One ``client.enhance.stream`` call and the input it has not answered."""
+    """One stream on the session and the input it has not answered."""
 
     def __init__(self, sample_rate: int, started: float) -> None:
         self.sample_rate = sample_rate
         self.started = started
         self.last_push = started
-        self.queue: asyncio.Queue[bytes] = asyncio.Queue()
+        # ``None`` ends the input: the SDK sends ``end`` and the stream
+        # finishes with ``done``, leaving the session socket open.
+        self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.finishing = False
         # Pushed input the server has not answered yet. On failure it goes
         # back to the caller as original audio, so no speech is lost.
         self.unanswered = bytearray()
@@ -143,15 +151,21 @@ class _Stream:
         # The SDK starts reading the input only once the server said ready,
         # so the first read is the moment this stream goes live.
         on_ready(self)
-        while True:
-            yield await self.queue.get()
+        while (chunk := await self.queue.get()) is not None:
+            yield chunk
+
+    def finish(self) -> None:
+        """End the input; the server answers what it has and ``done``."""
+        self.finishing = True
+        self.queue.put_nowait(None)
 
 
 class LiveEnhancer:
     """Non-blocking speech enhancement over one reconnecting stream.
 
     Call :meth:`push` with each input frame and :meth:`pull` for the output,
-    both from the event loop. The first push opens the stream.
+    both from the event loop. The first push opens the stream, on the socket
+    :meth:`prewarm` opened when it ran.
 
     Failure policy: :class:`~kugelaudio.AuthenticationError`,
     :class:`~kugelaudio.InsufficientCreditsError` and
@@ -207,6 +221,7 @@ class LiveEnhancer:
         # cancelled that are closing their socket, so aclose() can wait for all.
         self._tasks: set[asyncio.Task[None]] = set()
         self._prewarm_task: asyncio.Task[None] | None = None
+        self._session: EnhanceSession | None = None
 
     @property
     def state(self) -> LiveEnhancerState:
@@ -238,16 +253,16 @@ class LiveEnhancer:
         stream = self._stream
         if stream is not None and stream.sample_rate != sample_rate:
             logger.info(
-                "Input sample rate changed from %d to %d Hz; reopening the "
+                "Input sample rate changed from %d to %d Hz; starting a new "
                 "enhancement stream.",
                 stream.sample_rate,
                 sample_rate,
             )
-            self._end_stream(stream, LiveEnhancerState.IDLE)
+            self._end_stream(stream, LiveEnhancerState.IDLE, graceful=True)
             stream = None
         if stream is not None and now - stream.started > _MAX_STREAM_S:
             logger.info("Rotating the enhancement stream before its 3600 s limit.")
-            self._end_stream(stream, LiveEnhancerState.IDLE)
+            self._end_stream(stream, LiveEnhancerState.IDLE, graceful=True)
             stream = None
         if stream is None:
             if self._state is LiveEnhancerState.DISABLED or (
@@ -281,11 +296,12 @@ class LiveEnhancer:
             )
 
     def prewarm(self) -> None:
-        """Warm the connection to the enhancement endpoint in the background.
+        """Open the session's socket in the background, before the first audio.
 
         Never waits and never raises: audio pushed meanwhile passes through as
-        before. A no-op while a prewarm is still running, and outside a running
-        event loop (the adapters call it again once the pipeline runs).
+        before. A no-op while a prewarm is still running or the socket is
+        open, and outside a running event loop (the adapters call it again
+        once the pipeline runs).
         """
         try:
             loop = asyncio.get_running_loop()
@@ -310,36 +326,68 @@ class LiveEnhancer:
         self._disable(self._stream, error)
 
     def pause(self) -> None:
-        """End the stream; the next push opens a new one. Input the server had
-        not answered comes back as original audio on the next pull."""
+        """End the stream; the next push starts a new one on the same socket.
+        Input the server had not answered comes back as original audio on the
+        next pull."""
         if self._stream is not None:
-            self._end_stream(self._stream, LiveEnhancerState.IDLE)
+            self._end_stream(self._stream, LiveEnhancerState.IDLE, graceful=True)
 
     def close(self) -> None:
         """End the stream, stop a running prewarm, and drop any output not
-        pulled yet."""
-        self.pause()
-        self._output = []
-        if self._prewarm_task is not None and not self._prewarm_task.done():
-            self._prewarm_task.cancel()
+        pulled yet. The session's socket stays open for the next stream (a
+        LiveKit processor is reused for the participant's next track) until
+        the server closes it after 60 idle seconds, or :meth:`aclose`."""
+        self._stop(graceful=True)
 
     async def aclose(self) -> None:
-        """:meth:`close`, then wait until every connection this enhancer opened
-        is closed, including streams it already replaced (reconnect, rotation,
-        sample-rate change) that are still closing their socket."""
-        self.close()
+        """End the stream and close the session's socket, then wait until
+        every connection this enhancer opened is closed, including streams it
+        already replaced (reconnect, rotation, sample-rate change)."""
+        self._stop(graceful=False)
+        session, self._session = self._session, None
+        if session is not None:
+            self._spawn(session.aclose())
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
     # ------------------------------------------------------------ internals
 
+    def _stop(self, *, graceful: bool) -> None:
+        if self._stream is not None:
+            self._end_stream(self._stream, LiveEnhancerState.IDLE, graceful=graceful)
+        self._output = []
+        if self._prewarm_task is not None and not self._prewarm_task.done():
+            self._prewarm_task.cancel()
+
+    def _session_for_streams(self) -> EnhanceSession:
+        if self._session is None:
+            self._session = self._client.enhance.session()
+        return self._session
+
+    def _spawn(self, work: Coroutine[object, object, None]) -> None:
+        try:
+            task = asyncio.get_running_loop().create_task(work)
+        except RuntimeError:
+            work.close()  # no loop: nothing was opened that needs closing
+            return
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
     async def _prewarm(self) -> None:
         try:
-            await self._client.enhance.prewarm()
+            await self._session_for_streams().connect()
+        except _TRANSIENT_ERRORS as e:
+            # KEEP-JUSTIFIED: warming is an optimisation; the first stream
+            # connects on its own and handles the same failure by its policy.
+            logger.warning(
+                "Could not prewarm the enhancement connection (%s: %s); the first "
+                "stream will connect instead.",
+                type(e).__name__,
+                e,
+            )
         except Exception:
-            # KEEP-JUSTIFIED: prewarm already logs network errors itself; anything
-            # else is a bug, logged with its traceback, and must not reach the
-            # audio path. The first stream connects on its own either way.
+            # KEEP-JUSTIFIED: a bug, logged with its traceback; it must not
+            # reach the audio path.
             logger.warning("Prewarming the enhancement connection failed.", exc_info=True)
 
     def _pass_through(self, pcm: bytes, sample_rate: int) -> None:
@@ -360,7 +408,7 @@ class LiveEnhancer:
     async def _run(self, stream: _Stream) -> None:
         source: AsyncIterator[bytes] | None = None
         try:
-            source = self._client.enhance.stream(
+            source = self._session_for_streams().stream(
                 stream.audio(self._on_ready),
                 model=self._model,
                 sample_rate=stream.sample_rate,
@@ -375,10 +423,13 @@ class LiveEnhancer:
         except Exception as e:  # noqa: BLE001 - a bug: disable loudly, never retry-loop
             self._disable(stream, e, unexpected=True)
         else:
-            self._fail(
-                stream,
-                KugelAudioConnectionError("The enhancement stream ended unexpectedly."),
-            )
+            if not stream.finishing:
+                self._fail(
+                    stream,
+                    KugelAudioConnectionError(
+                        "The enhancement stream ended unexpectedly."
+                    ),
+                )
         finally:
             close = getattr(source, "aclose", None)
             if close is not None:
@@ -400,10 +451,11 @@ class LiveEnhancer:
             return
         idle = self._clock() - stream.last_push
         if idle >= self._idle_close_s:
-            # No frames (a muted track): close before the server's 30 s idle
-            # timeout turns it into a failure. The next push reopens.
-            logger.info("Closing the enhancement stream after %.0fs without audio.", idle)
-            self._end_stream(stream, LiveEnhancerState.IDLE)
+            # No frames (a muted track): end the stream before the server's
+            # 30 s no-audio rule turns it into a failure. The socket stays
+            # open for the next push until the server's 60 s idle close.
+            logger.info("Ending the enhancement stream after %.0fs without audio.", idle)
+            self._end_stream(stream, LiveEnhancerState.IDLE, graceful=True)
             return
         self._arm_idle_timer(stream, self._idle_close_s - idle)
 
@@ -420,7 +472,12 @@ class LiveEnhancer:
             del stream.unanswered[:drop]
             stream.answered_samples += drop // 2
 
-    def _end_stream(self, stream: _Stream, next_state: LiveEnhancerState) -> None:
+    def _end_stream(
+        self, stream: _Stream, next_state: LiveEnhancerState, *, graceful: bool = False
+    ) -> None:
+        """Stop feeding ``stream``. ``graceful`` ends its input so it finishes
+        with ``done`` and the session socket stays reusable; otherwise it is
+        cancelled and the session drops the socket."""
         self._stream = None
         self._state = next_state
         if stream.unanswered:
@@ -429,9 +486,19 @@ class LiveEnhancer:
         if stream.idle_timer is not None:
             stream.idle_timer.cancel()
         task = stream.task
+        if task is None or task.done():
+            return
+        if graceful:
+            stream.finish()
+            # The next stream waits for this one's done on the session; a done
+            # that never comes (a dead network) must not hold it past the
+            # ready timeout, so the stream is cancelled then.
+            asyncio.get_running_loop().call_later(
+                self._ready_timeout_s, _cancel_unless_done, task
+            )
         # _run ends on its own when it is the caller; cancelling it there
         # would interrupt its own connection cleanup.
-        if task is not None and not task.done() and task is not asyncio.current_task():
+        elif task is not asyncio.current_task():
             task.cancel()
 
     def _fail(self, stream: _Stream, error: Exception) -> None:
@@ -477,6 +544,11 @@ class LiveEnhancer:
                 # KEEP-JUSTIFIED: a broken user callback must not take the
                 # audio path down with it; it is logged with its traceback.
                 logger.exception("The enhancement on_error callback raised.")
+
+
+def _cancel_unless_done(task: asyncio.Task[None]) -> None:
+    if not task.done():
+        task.cancel()
 
 
 class PlayoutBuffer:

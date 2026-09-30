@@ -32,7 +32,7 @@ Example usage:
 
 from kugelaudio.audio import Audio, AudioStream, load_audio, load_audio_stream
 from kugelaudio.client import KugelAudio
-from kugelaudio.enhance import EnhancedAudio, EnhanceResource
+from kugelaudio.enhance import EnhancedAudio, EnhanceResource, EnhanceSession
 from kugelaudio.exceptions import (
     AuthenticationError,
     InsufficientCreditsError,
@@ -84,6 +84,7 @@ __all__ = [
     "DictionaryEntry",
     "DictionaryEntryList",
     "EnhanceResource",
+    "EnhanceSession",
     "EnhancedAudio",
     "GeneratedSample",
     "GenerateRequest",

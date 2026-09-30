@@ -136,16 +136,153 @@ async def test_prewarms_at_construction_and_on_attach() -> None:
     processor = make_processor(FakeServer())
     client = processor.enhancer._client
     await settle()
-    assert client.enhance.prewarms == 1
+    assert client.enhance.connects == 1
 
     processor._on_stream_info_updated(
         room_name="room", participant_identity="caller", publication_sid="PA_1"
     )
     await settle()
-    assert client.enhance.prewarms == 2
+    assert client.enhance.connects == 2
     processor._close()
 
 
 def test_construction_outside_a_loop_defers_prewarm_to_attach() -> None:
     processor = make_processor(FakeServer())
-    assert processor.enhancer._client.enhance.prewarms == 0
+    assert processor.enhancer._client.enhance.connects == 0
+
+
+# ------------------------------------ in a real rtc.AudioStream, real socket
+#
+# The processor runs inside LiveKit's own AudioStream (a local track fed by an
+# AudioSource), against the local session server of test_enhance_session.py,
+# which counts the connections it accepts.
+
+import asyncio  # noqa: E402
+
+from kugelaudio import KugelAudio  # noqa: E402
+
+from .test_enhance_session import SessionServer, env, wait_for  # noqa: E402, F401 - env is a fixture
+
+ENHANCED = 1000  # the sample value the server answers with
+
+
+async def through_track(
+    processor: object, rate: int, count: int, *, close_processor: bool = True
+) -> list[rtc.AudioFrame]:
+    """Feed ``count`` 10 ms frames at real-time pace through a local track and
+    return what LiveKit's AudioStream hands on after the processor."""
+    source = rtc.AudioSource(rate, 1)
+    track = rtc.LocalAudioTrack.create_audio_track("mic", source)
+    stream = rtc.AudioStream(
+        track,
+        sample_rate=rate,
+        num_channels=1,
+        noise_cancellation=processor,  # type: ignore[arg-type]
+        auto_close_noise_cancellation=close_processor,
+    )
+
+    async def feed() -> None:
+        for _ in range(count):
+            await source.capture_frame(frame(rate, ms=10))
+            await asyncio.sleep(0.01)
+
+    async def read() -> list[rtc.AudioFrame]:
+        out: list[rtc.AudioFrame] = []
+        async for event in stream:
+            out.append(event.frame)
+            if len(out) == count:
+                break
+        return out
+
+    feeder = asyncio.create_task(feed())
+    try:
+        out = await asyncio.wait_for(read(), 10)
+    finally:
+        await feeder
+        await stream.aclose()
+        await source.aclose()
+    return out
+
+
+def assert_input_sized(frames: list[rtc.AudioFrame], rate: int, count: int) -> None:
+    assert len(frames) == count
+    assert {(f.sample_rate, f.num_channels, f.samples_per_channel) for f in frames} == {
+        (rate, 1, rate // 100)
+    }
+
+
+def enhanced(frames: list[rtc.AudioFrame]) -> bool:
+    return any(max(f.data) > ENHANCED // 2 for f in frames)
+
+
+def session_processor(server: SessionServer, client: KugelAudio):  # noqa: ANN201 - livekit type
+    from kugelaudio.livekit import enhancement
+
+    server.reply_sample = ENHANCED
+    return enhancement(client=client)
+
+
+async def test_prewarm_opens_the_session_socket_before_the_first_frame(env) -> None:
+    server, client = env
+    processor = session_processor(server, client)
+    await wait_for(lambda: server.connections == 1)
+    assert server.configs == []
+    out = await through_track(processor, 16000, 60)
+    assert_input_sized(out, 16000, 60)
+    assert enhanced(out)
+    assert server.connections == 1 and processor.enhancer.failures == 0
+    await processor.enhancer.aclose()
+
+
+async def test_two_tracks_and_a_rate_change_share_one_socket(env) -> None:
+    server, client = env
+    processor = session_processor(server, client)
+    first = await through_track(processor, 16000, 60)
+    second = await through_track(processor, 48000, 60)
+    assert_input_sized(first, 16000, 60)
+    assert_input_sized(second, 48000, 60)
+    assert enhanced(first) and enhanced(second)
+    assert server.rates() == [16000, 48000]
+    assert server.connections == 1 and processor.enhancer.failures == 0
+    await processor.enhancer.aclose()
+
+
+async def test_a_rate_change_mid_track_sends_a_new_config_on_the_socket(env) -> None:
+    server, client = env
+    processor = session_processor(server, client)
+    await through_track(processor, 16000, 40, close_processor=False)
+    out = await through_track(processor, 24000, 60)
+    assert_input_sized(out, 24000, 60)
+    assert enhanced(out)
+    assert server.rates() == [16000, 24000] and server.connections == 1
+    await processor.enhancer.aclose()
+
+
+@pytest.mark.parametrize(
+    ("server_rule", "connections"),
+    [("restart_1012", 2), ("idle_close", 2), ("no_session_support", 2)],
+)
+async def test_a_socket_the_server_closed_is_replaced_without_losing_audio(
+    env, server_rule: str, connections: int
+) -> None:
+    server, client = env
+    if server_rule == "restart_1012":
+        server.close_after_audio = 1012
+    elif server_rule == "idle_close":
+        server.session_idle_close_s = 0.2
+    else:
+        server.supports_sessions = False
+    processor = session_processor(server, client)
+    await wait_for(lambda: server.connections == 1)
+    if server_rule == "idle_close":
+        await asyncio.sleep(0.4)  # the prewarmed socket is closed by the server
+    first = await through_track(processor, 16000, 60)
+    second = await through_track(processor, 16000, 60)
+    # Every frame comes back, at its size: pass-through while reconnecting.
+    assert_input_sized(first, 16000, 60)
+    assert_input_sized(second, 16000, 60)
+    assert enhanced(second)
+    assert len(server.configs) == 2
+    assert server.connections == connections
+    assert processor.enhancer.failures == 0
+    await processor.enhancer.aclose()

@@ -14,8 +14,10 @@ import json
 import logging
 import os
 import threading
+import time
 import wave
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
+from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -34,6 +36,7 @@ from kugelaudio.exceptions import (
 )
 from kugelaudio.exceptions import (
     KugelAudioError,
+    RateLimitError,
     ValidationError,
     classify_http_response,
     classify_ws_close,
@@ -178,6 +181,21 @@ def _log_prewarm_failure(e: httpx.TransportError, url: str) -> None:
 # ------------------------------------------------------------- WebSocket
 
 
+def _stream_config(model: str, sample_rate: int, speaker: Audio | None) -> dict:
+    config: dict = {
+        "type": "config",
+        "model": model,
+        "task": TASK_NOISE_REMOVAL,
+        "sample_rate_hz": sample_rate,
+        "encoding": "pcm_s16le",
+    }
+    if speaker is not None:
+        _require_audio(speaker, "speaker")
+        config["task"] = TASK_TARGET_SPEAKER_EXTRACTION
+        config["speaker_wav_b64"] = base64.b64encode(speaker.data).decode("ascii")
+    return config
+
+
 def _stream_rate(audio: Any, sample_rate: int | None, allow_async: bool) -> int:
     """Validate the stream input and return its sample rate."""
     if isinstance(audio, AudioStream):
@@ -235,7 +253,8 @@ def _handshake_error(e: Exception) -> KugelAudioError:
     return KugelAudioConnectionError(f"KugelAudio WebSocket handshake failed: {e}.")
 
 
-def _check_ready(message: Any) -> None:
+def _check_ready(message: Any) -> dict:
+    """The ``ready`` frame; raises on an ``error`` frame or anything else."""
     data = json.loads(message) if isinstance(message, str) else {}
     if data.get("type") == "error":
         raise classify_ws_frame(data)
@@ -243,6 +262,7 @@ def _check_ready(message: Any) -> None:
         raise KugelAudioConnectionError(
             "Unexpected first message from the enhancement stream."
         )
+    return data
 
 
 def _is_done(message: str) -> bool:
@@ -255,6 +275,13 @@ def _is_done(message: str) -> bool:
 
 _END = json.dumps({"type": "end"})
 _NOT_READY = "The enhancement stream did not become ready in time."
+# The server closes a session after 60 s without a config and at 1 h; a socket
+# is not reused past these, a little before the server's limits.
+_SESSION_IDLE_S = 55.0
+_SESSION_LIFETIME_S = 3540.0
+# What a server without session mode sends on a socket left without a config
+# for 30 s, before it closes it: that socket is stale, not the new config wrong.
+_IDLE_FRAME_CODE = 408
 
 
 def _run_stream_sync(
@@ -332,24 +359,57 @@ async def _pump_async(ws: Any, audio: Any, max_bytes: int) -> None:
         return  # the receive side reports why the server closed
 
 
-async def _run_stream_async(
-    url: str, config: dict, audio: Any, timeout: float
-) -> AsyncIterator[bytes]:
+async def _connect_async(url: str) -> Any:
     import websockets
+    from websockets.exceptions import InvalidURI
+
+    try:
+        return await websockets.connect(url, compression=None)
+    except ws_handshake_error_types(websockets) as e:
+        raise _handshake_error(e) from e
+    except InvalidURI:
+        # Its text holds the URL, whose query carries the API key.
+        raise ValidationError(
+            "The KugelAudio API URL does not form a valid WebSocket URL."
+        ) from None
+
+
+class _StaleSocket(Exception):
+    """A reused session socket turned out closed before it took the config."""
+
+
+async def _begin_async(ws: Any, config: dict, timeout: float, *, reused: bool) -> dict:
+    """Send ``config`` and wait for ``ready``; returns it.
+
+    On a ``reused`` socket, a close (the server's idle, lifetime or restart
+    close) or an old server's idle-timeout frame raises :class:`_StaleSocket`.
+    """
     from websockets.exceptions import ConnectionClosed
 
     try:
-        ws = await websockets.connect(url, compression=None)
-    except ws_handshake_error_types(websockets) as e:
-        raise _handshake_error(e) from e
+        await ws.send(json.dumps(config))
+        message = await asyncio.wait_for(ws.recv(), timeout)
+    except ConnectionClosed as e:
+        if reused:
+            raise _StaleSocket from e
+        raise _closed_error(e) from e
+    except asyncio.TimeoutError as e:
+        raise KugelAudioConnectionError(_NOT_READY) from e
+    if reused and isinstance(message, str):
+        frame = json.loads(message)
+        if frame.get("type") == "error" and frame.get("code") == _IDLE_FRAME_CODE:
+            raise _StaleSocket
+    return _check_ready(message)
+
+
+async def _exchange_async(ws: Any, config: dict, audio: Any) -> AsyncIterator[bytes]:
+    """After ``ready``: send the audio and ``end`` from a task, yield the
+    enhanced chunks until ``done``. Leaves the socket open."""
+    from websockets.exceptions import ConnectionClosed
+
     sender: asyncio.Task[None] | None = None
     receiver: asyncio.Future[Any] | None = None
     try:
-        await ws.send(json.dumps(config))
-        try:
-            _check_ready(await asyncio.wait_for(ws.recv(), timeout))
-        except asyncio.TimeoutError as e:
-            raise KugelAudioConnectionError(_NOT_READY) from e
         sender = asyncio.ensure_future(
             _pump_async(ws, audio, config["sample_rate_hz"] * 2)
         )
@@ -378,7 +438,224 @@ async def _run_stream_async(
             task.cancel()
         # Retrieve every outcome so no "exception was never retrieved" leaks.
         await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def _run_stream_async(
+    url: str, config: dict, audio: Any, timeout: float
+) -> AsyncIterator[bytes]:
+    ws = await _connect_async(url)
+    try:
+        await _begin_async(ws, config, timeout, reused=False)
+        async with aclosing(_exchange_async(ws, config, audio)) as chunks:
+            async for chunk in chunks:
+                yield chunk
+    finally:
         await ws.close()
+
+
+def _is_open(ws: Any) -> bool:
+    return getattr(ws, "close_code", None) is None
+
+
+class EnhanceSession:
+    """One warm WebSocket that carries enhancement streams one after another.
+
+    From :meth:`EnhanceResource.session`. Use it as an async context manager,
+    or call :meth:`connect` ahead of the first audio (e.g. while an agent
+    starts) and :meth:`aclose` when done. Each :meth:`stream` sends its own
+    config, so the task, speaker and sample rate may change between streams;
+    it is admitted and billed as one request of its own. Streams run one at a
+    time: a second :meth:`stream` waits until the first has finished.
+
+    The socket is replaced without an error when the server closed it (after
+    60 s without a stream, at its one-hour lifetime, or during a restart). A
+    server without session support gets one connection per stream instead.
+
+    Example:
+        async with client.enhance.session() as session:
+            async for chunk in session.stream(first, model="clarity-1"):
+                play(chunk)
+            async for chunk in session.stream(second, model="clarity-1"):
+                play(chunk)
+    """
+
+    def __init__(self, resource: EnhanceResource) -> None:
+        self._resource = resource
+        self._ws: Any = None
+        self._opened_at = 0.0
+        self._idle_since = 0.0
+        self._lock = asyncio.Lock()
+        self._one_shot = False
+        self._closed = False
+        self._connecting: asyncio.Future[Any] | None = None
+        # Whether the server kept this session's socket for several streams:
+        # None until a stream or a refusal showed it.
+        self._honored: bool | None = None
+
+    async def __aenter__(self) -> EnhanceSession:
+        await self.connect()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
+    async def connect(self) -> None:
+        """Open the session's socket now, so the next :meth:`stream` skips the
+        connection setup. Does nothing while an open socket is reusable.
+
+        Raises the typed handshake errors of :meth:`EnhanceResource.stream`
+        (e.g. :class:`~kugelaudio.AuthenticationError`).
+        """
+        async with self._lock:
+            await self._socket()
+
+    def stream(
+        self,
+        audio: AudioStream | Iterable[bytes] | AsyncIterable[bytes],
+        *,
+        model: str,
+        sample_rate: int | None = None,
+        speaker: Audio | None = None,
+    ) -> AsyncIterator[bytes]:
+        """Enhance one audio on the session's socket; same arguments and
+        output as :meth:`EnhanceResource.stream`.
+
+        Breaking out of the loop ends this audio and closes the socket (the
+        next stream opens a new one).
+        """
+        _check_model(model)
+        rate = _stream_rate(audio, sample_rate, allow_async=True)
+        config = _stream_config(model, rate, speaker)
+        return self._run(config, audio)
+
+    async def aclose(self) -> None:
+        """Close the socket, and stop a connect still in flight; the session
+        cannot stream afterwards."""
+        self._closed = True
+        connecting = self._connecting
+        if connecting is not None:
+            connecting.cancel()
+            await asyncio.wait({connecting})
+        await self._drop()
+
+    async def _run(self, config: dict, audio: Any) -> AsyncIterator[bytes]:
+        timeout = self._resource._client._timeout
+        async with self._lock:
+            ws, reused = await self._socket()
+            if ws is None:
+                url = self._resource._stream_url(session=False)
+                async with aclosing(
+                    _run_stream_async(url, config, audio, timeout)
+                ) as chunks:
+                    async for chunk in chunks:
+                        yield chunk
+                return
+            try:
+                try:
+                    ready = await _begin_async(ws, config, timeout, reused=reused)
+                except _StaleSocket:
+                    await self._drop()
+                    ws, _ = await self._socket()
+                    if ws is None:
+                        raise KugelAudioConnectionError(
+                            "The enhancement session could not be reopened."
+                        ) from None
+                    ready = await _begin_async(ws, config, timeout, reused=False)
+            except RateLimitError:
+                # A rate-limit refusal of the config leaves the socket open.
+                if not _is_open(ws):
+                    await self._drop()
+                raise
+            except BaseException:
+                # Refused, failed or cancelled mid-config: the server's state
+                # for this socket is unknown, so it is not reused.
+                await self._drop()
+                raise
+            self._honored = "request_id" in ready
+            if not self._honored:
+                # The server ignored session=1: it closes after this audio.
+                logger.info(
+                    "The enhancement server does not keep sessions open; using "
+                    "one connection per stream."
+                )
+                self._one_shot = True
+            finished = False
+            try:
+                async with aclosing(_exchange_async(ws, config, audio)) as chunks:
+                    async for chunk in chunks:
+                        yield chunk
+                finished = True
+            finally:
+                if finished and not self._one_shot:
+                    self._idle_since = time.monotonic()
+                else:
+                    await self._drop()
+
+    async def _socket(self) -> tuple[Any, bool]:
+        """The session socket and whether it was already open, opening one
+        when needed; ``(None, False)`` when this stream must connect on its own."""
+        if self._closed:
+            raise KugelAudioError("The enhancement session is closed.")
+        if self._one_shot:
+            return None, False
+        if self._ws is not None and self._reusable():
+            return self._ws, True
+        await self._drop()
+        url = self._resource._stream_url(session=True)
+        try:
+            ws = await self._connect(url)
+        except (RateLimitError, ValidationError) as e:
+            if isinstance(e, RateLimitError) and e.retry_after is not None:
+                raise
+            # The open-session limit (429 without Retry-After) or a server
+            # that does not know sessions (400): stream on a connection of its own.
+            if isinstance(e, ValidationError):
+                self._one_shot = True
+            self._honored = False
+            logger.info(
+                "The enhancement session was refused (%s); streaming on a "
+                "connection of its own.",
+                e,
+            )
+            return None, False
+        self._ws = ws
+        self._opened_at = self._idle_since = time.monotonic()
+        return ws, False
+
+    async def _connect(self, url: str) -> Any:
+        """Open a socket that :meth:`aclose` can stop while it connects; raises
+        the session-closed error when the session closed meanwhile."""
+        connecting = asyncio.ensure_future(_connect_async(url))
+        self._connecting = connecting
+        try:
+            await asyncio.wait({connecting})
+        except BaseException:
+            # This stream was cancelled: stop the connect, close what it opened.
+            connecting.cancel()
+            await asyncio.wait({connecting})
+            if not connecting.cancelled() and connecting.exception() is None:
+                await connecting.result().close()
+            raise
+        finally:
+            self._connecting = None
+        if self._closed:
+            if not connecting.cancelled() and connecting.exception() is None:
+                await connecting.result().close()
+            raise KugelAudioError("The enhancement session is closed.")
+        return connecting.result()
+
+    def _reusable(self) -> bool:
+        now = time.monotonic()
+        return (
+            _is_open(self._ws)
+            and now - self._idle_since < _SESSION_IDLE_S
+            and now - self._opened_at < _SESSION_LIFETIME_S
+        )
+
+    async def _drop(self) -> None:
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            await ws.close()
 
 
 # -------------------------------------------------------------- resource
@@ -411,25 +688,14 @@ class EnhanceResource:
     def _url(self) -> str:
         return urljoin(self._client._api_url + "/", _ENHANCE_PATH.lstrip("/"))
 
-    def _stream_args(
-        self, model: str, sample_rate: int, speaker: Audio | None
-    ) -> tuple[str, dict]:
-        config: dict = {
-            "type": "config",
-            "model": model,
-            "task": TASK_NOISE_REMOVAL,
-            "sample_rate_hz": sample_rate,
-            "encoding": "pcm_s16le",
-        }
-        if speaker is not None:
-            _require_audio(speaker, "speaker")
-            config["task"] = TASK_TARGET_SPEAKER_EXTRACTION
-            config["speaker_wav_b64"] = base64.b64encode(speaker.data).decode("ascii")
+    def _stream_url(self, *, session: bool) -> str:
         base = self._client._api_url.replace("https://", "wss://").replace(
             "http://", "ws://"
         )
-        query = urlencode({"api_key": self._client._api_key})
-        return f"{base}{_ENHANCE_STREAM_PATH}?{query}&{sdk_query_string()}", config
+        params = {"api_key": self._client._api_key}
+        if session:
+            params["session"] = "1"
+        return f"{base}{_ENHANCE_STREAM_PATH}?{urlencode(params)}&{sdk_query_string()}"
 
     async def generate(
         self,
@@ -556,8 +822,27 @@ class EnhanceResource:
         """
         _check_model(model)
         rate = _stream_rate(audio, sample_rate, allow_async=True)
-        url, config = self._stream_args(model, rate, speaker)
+        config = _stream_config(model, rate, speaker)
+        url = self._stream_url(session=False)
         return _run_stream_async(url, config, audio, self._client._timeout)
+
+    def session(self) -> EnhanceSession:
+        """A session: one warm WebSocket for many :meth:`stream`-style calls.
+
+        Opening a connection costs a TCP, TLS and WebSocket handshake plus the
+        server's admission; a session pays that once, and :meth:`EnhanceSession.connect`
+        pays it before the first audio. Each stream on it is still one request
+        (rate limits, billing). Use it as an async context manager.
+
+        Example:
+            async with client.enhance.session() as session:
+                for path in ("first.wav", "second.wav"):
+                    async for chunk in session.stream(
+                        load_audio_stream(path), model="clarity-1"
+                    ):
+                        play(chunk)
+        """
+        return EnhanceSession(self)
 
     def stream_sync(
         self,
@@ -580,8 +865,9 @@ class EnhanceResource:
         """
         _check_model(model)
         rate = _stream_rate(audio, sample_rate, allow_async=False)
-        url, config = self._stream_args(model, rate, speaker)
+        config = _stream_config(model, rate, speaker)
+        url = self._stream_url(session=False)
         return _run_stream_sync(url, config, audio, self._client._timeout)
 
 
-__all__ = ["EnhanceResource", "EnhancedAudio"]
+__all__ = ["EnhanceResource", "EnhanceSession", "EnhancedAudio"]

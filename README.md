@@ -770,6 +770,16 @@ last input has been enhanced. Breaking out of the loop closes the connection.
 Errors raise the usual SDK exceptions (`ValidationError`, `AuthenticationError`,
 `KugelAudioConnectionError`, …).
 
+For one audio after another, a session keeps one connection warm and reuses it:
+
+```python
+async with client.enhance.session() as session:
+    async for chunk in session.stream(load_audio_stream("first.wav"), model="clarity-1"):
+        ...
+    async for chunk in session.stream(load_audio_stream("second.wav"), model="clarity-1"):
+        ...
+```
+
 ## Error Handling
 
 ```python
