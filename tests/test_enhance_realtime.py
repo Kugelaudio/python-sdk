@@ -113,6 +113,14 @@ class FakeEnhance:
         self.connects = 0
         self.connect_error: Exception | None = None
         self.connect_hangs = False
+        self.warmups = 0
+        self.warmup_error: Exception | None = None
+
+    async def prewarm(self) -> None:
+        """Stands in for client.enhance.prewarm (the HTTP warm-up request)."""
+        self.warmups += 1
+        if self.warmup_error is not None:
+            raise self.warmup_error
 
     def session(self) -> FakeSession:
         self.sessions += 1
@@ -330,6 +338,24 @@ async def test_ready_timeout_reconnects() -> None:
     assert server.closed
 
 
+async def test_default_ready_timeout_waits_30s_for_a_cold_gpu() -> None:
+    clock = Clock()
+    server = FakeServer(hang_before_ready=True)
+    enhancer, _ = make(server, clock=clock)
+    enhancer.push(FRAME, RATE)
+    await settle()
+
+    clock.now = 29.9  # a cold GPU can take this long to restore
+    await push_frames(enhancer, 1)
+    assert enhancer.state is LiveEnhancerState.WARMING
+    assert seconds(enhancer.pull()) == pytest.approx(0.04)  # still passed through
+
+    clock.now = 30.1
+    await push_frames(enhancer, 1)
+    assert enhancer.state is LiveEnhancerState.RECONNECTING
+    await enhancer.aclose()
+
+
 async def test_stream_ending_early_is_a_transient_failure() -> None:
     enhancer, _ = make(FakeServer(end_after_frames=1))
     enhancer.push(FRAME, RATE)
@@ -539,12 +565,37 @@ async def test_prewarm_again_after_the_first_finished() -> None:
     await settle()
     assert client.enhance.connects == 2
     assert client.enhance.sessions == 1
+    assert client.enhance.warmups == 2
+
+
+async def test_prewarm_sends_the_warmup_while_the_socket_still_connects() -> None:
+    enhancer, client = make()
+    client.enhance.connect_hangs = True
+    enhancer.prewarm()
+    await settle()
+    assert client.enhance.connects == 1
+    assert client.enhance.warmups == 1  # not waiting for the socket
+    await asyncio.wait_for(enhancer.aclose(), 1)
+
+
+async def test_prewarm_warmup_bug_is_logged_and_the_socket_still_opens(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    enhancer, client = make()
+    client.enhance.warmup_error = RuntimeError("boom")
+    with caplog.at_level(logging.WARNING, logger="kugelaudio.enhance"):
+        enhancer.prewarm()
+        await settle()
+    assert "Warming up enhancement failed" in caplog.text
+    assert client.enhance.connects == 1
+    assert enhancer.state is LiveEnhancerState.IDLE
 
 
 def test_prewarm_outside_an_event_loop_is_skipped() -> None:
     enhancer, client = make()
     enhancer.prewarm()
     assert client.enhance.connects == 0
+    assert client.enhance.warmups == 0
 
 
 async def test_prewarm_bug_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:

@@ -175,6 +175,10 @@ class LiveEnhancer:
     than ``max_backlog_s`` unanswered) passes audio through while it
     reconnects with capped exponential backoff, honouring ``retry_after``;
     each is logged at WARNING and counted in :attr:`failures`.
+
+    ``ready_timeout_s`` (default 30 s) leaves room for a cold start: after a
+    quiet period the server can take several seconds to ready enhancement,
+    and audio passes through unchanged until it does.
     """
 
     def __init__(
@@ -184,7 +188,7 @@ class LiveEnhancer:
         model: str = DEFAULT_ENHANCE_MODEL,
         speaker: Audio | None = None,
         max_backlog_s: float = 2.0,
-        ready_timeout_s: float = 5.0,
+        ready_timeout_s: float = 30.0,
         idle_close_s: float = 10.0,
         backoff_initial_s: float = 0.5,
         backoff_max_s: float = 30.0,
@@ -296,7 +300,9 @@ class LiveEnhancer:
             )
 
     def prewarm(self) -> None:
-        """Open the session's socket in the background, before the first audio.
+        """Ready enhancement in the background, before the first audio: send
+        the warm-up request (``client.enhance.prewarm``) and open the
+        session's socket, both at once.
 
         Never waits and never raises: audio pushed meanwhile passes through as
         before. A no-op while a prewarm is still running or the socket is
@@ -374,6 +380,18 @@ class LiveEnhancer:
         task.add_done_callback(self._tasks.discard)
 
     async def _prewarm(self) -> None:
+        await asyncio.gather(self._warm_up(), self._connect_session())
+
+    async def _warm_up(self) -> None:
+        try:
+            # Logs a network error or a refused warm-up itself; never raises those.
+            await self._client.enhance.prewarm()
+        except Exception:
+            # KEEP-JUSTIFIED: a bug, logged with its traceback; it must not
+            # reach the audio path or stop the socket from opening.
+            logger.warning("Warming up enhancement failed.", exc_info=True)
+
+    async def _connect_session(self) -> None:
         try:
             await self._session_for_streams().connect()
         except _TRANSIENT_ERRORS as e:

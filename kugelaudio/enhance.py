@@ -56,6 +56,7 @@ ENHANCED_SAMPLE_RATE = 24000
 
 _ENHANCE_PATH = "/v1/audio/enhance"
 _ENHANCE_STREAM_PATH = "/v1/audio/enhance/stream"
+_ENHANCE_WARMUP_PATH = "/v1/audio/enhance/warmup"
 _SENDER_THREAD_NAME = "kugelaudio-enhance-send"
 _SENDER_JOIN_TIMEOUT_S = 5.0
 
@@ -175,6 +176,19 @@ def _log_prewarm_failure(e: httpx.TransportError, url: str) -> None:
         url,
         type(e).__name__,
         e,
+    )
+
+
+def _log_refused_warmup(response: httpx.Response) -> None:
+    if response.is_success:
+        return
+    # KEEP-JUSTIFIED: warming is an optimisation; the first real request gets
+    # the same answer (bad key, no model access) as its own typed error.
+    logger.warning(
+        "The enhancement warm-up was refused with HTTP %d (%s); the first request "
+        "may wait for a cold start.",
+        response.status_code,
+        response.text[:200],
     )
 
 
@@ -688,6 +702,9 @@ class EnhanceResource:
     def _url(self) -> str:
         return urljoin(self._client._api_url + "/", _ENHANCE_PATH.lstrip("/"))
 
+    def _warmup_url(self) -> str:
+        return urljoin(self._client._api_url + "/", _ENHANCE_WARMUP_PATH.lstrip("/"))
+
     def _stream_url(self, *, session: bool) -> str:
         base = self._client._api_url.replace("https://", "wss://").replace(
             "http://", "ws://"
@@ -753,38 +770,49 @@ class EnhanceResource:
         return _parse_response(response)
 
     async def prewarm(self) -> None:
-        """Open the connection :meth:`generate` uses, so the first request
-        skips the connection setup (TCP and TLS).
+        """Ready enhancement before the first request: start it on the server
+        and open the connection :meth:`generate` uses.
 
-        Sends one ``GET`` to the enhancement path, which only accepts ``POST``:
-        the server refuses it (405) before authentication or any processing,
-        so it is not billed and does not count against rate limits.
-        Safe to call any number of times. An idle connection is kept for up to
-        50 s, so call it shortly before the first request. A network error is
-        logged and not raised: the first real request then connects as usual.
+        Enhancement capacity scales down when nobody uses it, so the first
+        request after a quiet period can wait several seconds. This sends the
+        warm-up request (``POST /v1/audio/enhance/warmup``), which the server
+        answers at once while it readies enhancement in the background; it is
+        not billed and does not count against rate limits. It also opens the
+        connection (TCP and TLS) the next request reuses. Safe to call any
+        number of times; call it as soon as you know audio is coming. An idle
+        connection is kept for up to 50 s.
+
+        Never raises: a network error, or a refused warm-up (for example 401
+        for a bad API key), is logged at WARNING and the first real request
+        then connects as usual and raises its own error.
 
         Example:
             await client.enhance.prewarm()
             result = await client.enhance.generate(load_audio("call.wav"), model="clarity-1")
         """
-        url = self._url()
+        url = self._warmup_url()
         try:
-            await self._client._async_http.get().get(url)
+            response = await self._client._async_http.get().post(url)
         except httpx.TransportError as e:
             _log_prewarm_failure(e, url)
+            return
+        _log_refused_warmup(response)
 
     def prewarm_sync(self) -> None:
-        """Blocking :meth:`prewarm`: opens the connection :meth:`generate_sync` uses.
+        """Blocking :meth:`prewarm`: sends the warm-up request and opens the
+        connection :meth:`generate_sync` uses. Never raises.
 
         Example:
             client.enhance.prewarm_sync()
             result = client.enhance.generate_sync(load_audio("call.wav"), model="clarity-1")
         """
-        url = self._url()
+        url = self._warmup_url()
         try:
-            self._client._http_client.get(url)
+            response = self._client._http_client.post(url)
         except httpx.TransportError as e:
             _log_prewarm_failure(e, url)
+            return
+        _log_refused_warmup(response)
 
     def stream(
         self,

@@ -1,4 +1,4 @@
-"""Connection reuse and prewarming for ``client.enhance``.
+"""Connection reuse and prewarming (the warm-up request) for ``client.enhance``.
 
 Runs against a real local HTTP/1.1 server that counts accepted TCP
 connections, so reuse is measured on the socket, not inferred from a mock.
@@ -20,6 +20,9 @@ from kugelaudio import KugelAudio, load_audio
 
 from .test_enhance import INPUT_WAV, MODEL, OUTPUT_WAV
 
+WARMUP = "POST /v1/audio/enhance/warmup"
+ENHANCE = "POST /v1/audio/enhance"
+
 
 class _CountingServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -27,7 +30,9 @@ class _CountingServer(ThreadingHTTPServer):
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), _Handler)
         self.connections = 0
-        self.methods: list[str] = []
+        self.requests: list[str] = []
+        self.warmup_auth: list[str | None] = []
+        self.warmup_status = 202
 
     def process_request(self, request: socket.socket, client_address: object) -> None:
         self.connections += 1
@@ -39,21 +44,21 @@ class _Handler(BaseHTTPRequestHandler):
     server: _CountingServer
 
     def do_POST(self) -> None:
-        self.server.methods.append("POST")
-        self.rfile.read(int(self.headers["content-length"]))
-        self.send_response(200)
-        self.send_header("content-type", "audio/wav")
-        self.send_header("content-length", str(len(OUTPUT_WAV)))
-        self.end_headers()
-        self.wfile.write(OUTPUT_WAV)
+        request = f"POST {self.path}"
+        self.server.requests.append(request)
+        self.rfile.read(int(self.headers.get("content-length", 0)))
+        if request == WARMUP:
+            # What the enhance service answers on its warm-up route.
+            self.server.warmup_auth.append(self.headers.get("authorization"))
+            ok = self.server.warmup_status == 202
+            body = b'{"status":"warming"}' if ok else b'{"detail":"Invalid API key"}'
+            self._reply(self.server.warmup_status, "application/json", body)
+            return
+        self._reply(200, "audio/wav", OUTPUT_WAV)
 
-    def do_GET(self) -> None:
-        # What the enhance service answers for a GET on its POST-only route.
-        self.server.methods.append("GET")
-        body = b'{"detail":"Method Not Allowed"}'
-        self.send_response(405)
-        self.send_header("allow", "POST")
-        self.send_header("content-type", "application/json")
+    def _reply(self, status: int, content_type: str, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("content-type", content_type)
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -89,7 +94,7 @@ async def test_sequential_generate_calls_share_one_connection(server) -> None:
     for _ in range(3):
         await client.enhance.generate(audio, model=MODEL)
     await client.aclose()
-    assert server.methods == ["POST"] * 3
+    assert server.requests == [ENHANCE] * 3
     assert server.connections == 1
 
 
@@ -98,27 +103,47 @@ def test_sequential_generate_sync_calls_share_one_connection(server) -> None:
         audio = load_audio(INPUT_WAV)
         for _ in range(3):
             client.enhance.generate_sync(audio, model=MODEL)
-    assert server.methods == ["POST"] * 3
+    assert server.requests == [ENHANCE] * 3
     assert server.connections == 1
 
 
-async def test_prewarm_opens_the_connection_generate_then_reuses(server) -> None:
+async def test_prewarm_posts_the_warmup_and_generate_reuses_its_connection(server) -> None:
     client = _client(server)
     await client.enhance.prewarm()
     assert server.connections == 1
     await client.enhance.prewarm()  # idempotent: the same connection again
     await client.enhance.generate(load_audio(INPUT_WAV), model=MODEL)
     await client.aclose()
-    assert server.methods == ["GET", "GET", "POST"]
+    assert server.requests == [WARMUP, WARMUP, ENHANCE]
+    assert server.warmup_auth == ["Bearer sk-test", "Bearer sk-test"]
     assert server.connections == 1
 
 
-def test_prewarm_sync_opens_the_connection_generate_sync_then_reuses(server) -> None:
+def test_prewarm_sync_posts_the_warmup_and_generate_sync_reuses_its_connection(server) -> None:
     with _client(server) as client:
         client.enhance.prewarm_sync()
         client.enhance.generate_sync(load_audio(INPUT_WAV), model=MODEL)
-    assert server.methods == ["GET", "POST"]
+    assert server.requests == [WARMUP, ENHANCE]
+    assert server.warmup_auth == ["Bearer sk-test"]
     assert server.connections == 1
+
+
+async def test_prewarm_logs_a_refused_warmup_and_returns(server, caplog) -> None:
+    server.warmup_status = 401
+    client = _client(server)
+    with caplog.at_level(logging.WARNING, logger="kugelaudio.enhance"):
+        await client.enhance.prewarm()
+    await client.aclose()
+    (record,) = [r for r in caplog.records if r.name == "kugelaudio.enhance"]
+    assert record.levelno == logging.WARNING and "401" in record.getMessage()
+
+
+def test_prewarm_sync_logs_a_refused_warmup_and_returns(server, caplog) -> None:
+    server.warmup_status = 401
+    with _client(server) as client, caplog.at_level(logging.WARNING, logger="kugelaudio.enhance"):
+        client.enhance.prewarm_sync()
+    (record,) = [r for r in caplog.records if r.name == "kugelaudio.enhance"]
+    assert record.levelno == logging.WARNING and "401" in record.getMessage()
 
 
 def test_each_event_loop_gets_its_own_connection(server) -> None:
@@ -129,7 +154,7 @@ def test_each_event_loop_gets_its_own_connection(server) -> None:
     asyncio.run(client.enhance.generate(audio, model=MODEL))
     asyncio.run(client.enhance.generate(audio, model=MODEL))
     client.close()
-    assert server.methods == ["POST", "POST"]
+    assert server.requests == [ENHANCE, ENHANCE]
     assert server.connections == 2
 
 
