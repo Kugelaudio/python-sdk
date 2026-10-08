@@ -75,13 +75,14 @@ if decision.end_turn:
     turn.reset_turn()
 ```
 
-Stable `v2.1.1` contains both qualified quantization variants on one immutable
-policy-only patch over the byte-identical v2.1.0 weights. W8A32 is recommended
+Stable `v2.1.2` contains both qualified quantization variants on one immutable
+policy-only patch over the byte-identical v2.1.0 weights; its W8A32
+`responsive-300ms` English policy rescores from 200 ms to 1.5 s of silence. W8A32 is recommended
 and selected by default:
 
 ```python
 detector = TurnDetector.from_pretrained(
-    revision="v2.1.1",
+    revision="v2.1.2",
     preset="responsive-300ms",  # or conservative-600ms
     cpu_threads=12,
 )
@@ -92,14 +93,14 @@ better endpoint quality:
 
 ```python
 quantized = TurnDetector.from_pretrained(
-    revision="v2.1.1",
+    revision="v2.1.2",
     variant="models/w8a8-qat",
     preset="responsive-300ms",
     cpu_threads=12,
 )
 ```
 
-The SDK default pins the exact commit behind stable tag `v2.1.1`. Human-facing
+The SDK default pins the exact commit behind stable tag `v2.1.2`. Human-facing
 release tags are immutable; `channels/stable` and `channels/preview` are mutable
 operational pointers and must be selected explicitly. The W8A8 model is stable
 supported but not `recommended`: its 11.21% responsive false-cutoff rate exceeds
@@ -227,7 +228,7 @@ Important input and lifecycle rules:
 - No network is used after the immutable model revision is cached. Pass
   `local_files_only=True` to enforce offline startup.
 
-The stable v2.1.1 policies cover English. Applications serving additional
+The stable v2.1.2 policies cover English. Applications serving additional
 languages must explicitly route those sessions to a calibrated multilingual
 revision; the SDK never silently changes model identity. Unsupported languages,
 missing private-repository access, corrupt bundles, wrong sample rates, and

@@ -13,9 +13,9 @@ from ._schema import BundleManifest, TurnModelConfig, VariantIndex, load_schema
 from .errors import TurnBundleError, TurnDependencyError, TurnModelDownloadError
 
 DEFAULT_REPO_ID = "kugelaudio/turn-detection"
-# Exact commit behind immutable tag v2.1.1. Keep the SDK default reproducible;
+# Exact commit behind immutable tag v2.1.2. Keep the SDK default reproducible;
 # channel branches are intended for explicit preview/operations workflows.
-DEFAULT_REVISION = "21234773a703068a39f0d6a2db52726234747c03"
+DEFAULT_REVISION = "47c1c195d5ab00398479492efb60f1c5c1fffd6f"
 MANIFEST_FILENAME = "manifest.json"
 
 
