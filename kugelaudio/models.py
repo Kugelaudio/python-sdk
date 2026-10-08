@@ -95,6 +95,9 @@ class StreamingTranscriptionEvent:
     word_alternatives: List[WordAlternatives] = field(default_factory=list)
     model: Optional[str] = None
     model_revision: Optional[str] = None
+    # Detected language ("German" / "English"); set on the turn's revision
+    # frame, None on partials and on frames that do not report it.
+    language: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StreamingTranscriptionEvent":
@@ -104,6 +107,7 @@ class StreamingTranscriptionEvent:
             type=str(data.get("type", "partial")),
             model=data.get("model"),
             model_revision=data.get("model_revision"),
+            language=data.get("language"),
             turn_end_reason=data.get("turn_end_reason"),
             turn_end_confidence=(
                 float(data["turn_end_confidence"])

@@ -23,6 +23,26 @@ def test_asr_model_identity_fields_preserve_positional_constructors() -> None:
     assert response.model_revision is None
     assert event.turn_end_reason == "client_end_of_speech"
     assert event.model is None
+    assert event.language is None
+
+
+def test_streaming_event_language_is_parsed_and_optional() -> None:
+    revision = StreamingTranscriptionEvent.from_dict(
+        {
+            "type": "alternatives",
+            "partial_text": "Ich möchte einen Flug nach Berlin buchen.",
+            "is_final": True,
+            "revises_final": True,
+            "language": "German",
+            "word_alternatives": [],
+        }
+    )
+    partial = StreamingTranscriptionEvent.from_dict(
+        {"type": "partial", "partial_text": "Ich möchte", "is_final": False}
+    )
+
+    assert revision.language == "German"
+    assert partial.language is None
 
 
 class TestVoice:
