@@ -305,6 +305,7 @@ class VoicesResource:
         name: str,
         sex: str,
         *,
+        speaker_consent: bool,
         description: str = "",
         category: str = "conversational",
         age: str = "middle_age",
@@ -319,6 +320,11 @@ class VoicesResource:
         Args:
             name: Voice name
             sex: Voice sex ('male' or 'female')
+            speaker_consent: Pass ``True`` to confirm that you are the speaker
+                of the recordings or that you have the speaker's permission to
+                create a synthetic voice from them. Required: the API rejects
+                the request with ``SPEAKER_CONSENT_REQUIRED`` otherwise and
+                records the confirmation with your account.
             description: Human-readable description
             category: Voice category (e.g. 'conversational', 'narrative_story')
             age: Voice age ('young', 'middle_age', 'old')
@@ -341,6 +347,7 @@ class VoicesResource:
             "supported_languages": supported_languages or ["en"],
             "is_public": is_public,
             "sample_text": sample_text,
+            "speaker_consent": speaker_consent,
         }
 
         files_list: List[Tuple[str, Tuple[Optional[str], Any, str]]] = [
@@ -457,6 +464,7 @@ class VoicesResource:
         voice_id: int,
         file: Union[str, Path],
         *,
+        speaker_consent: bool,
         reference_text: str = "",
     ) -> VoiceReference:
         """Upload a reference audio file to a voice.
@@ -464,6 +472,10 @@ class VoicesResource:
         Args:
             voice_id: Voice ID
             file: Path to the reference audio file
+            speaker_consent: Pass ``True`` to confirm that you are the speaker
+                of this recording or that you have the speaker's permission to
+                create a synthetic voice from it. Required: the API rejects
+                the upload with ``SPEAKER_CONSENT_REQUIRED`` otherwise.
             reference_text: Transcript of the reference audio
 
         Returns:
@@ -474,6 +486,10 @@ class VoicesResource:
         try:
             files_list: List[Tuple[str, Tuple[Optional[str], Any, str]]] = [
                 ("file", (p.name, fh, "audio/wav")),
+                (
+                    "speaker_consent",
+                    (None, "true" if speaker_consent else "false", "text/plain"),
+                ),
             ]
             if reference_text:
                 files_list.append(

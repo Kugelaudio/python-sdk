@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -64,3 +65,57 @@ def test_list_references_rejects_unexpected_shape():
     with patch.object(client, "_request", return_value={"references": []}):
         with pytest.raises(KugelAudioError, match="JSON array"):
             client.voices.list_references(7)
+
+
+def _multipart_fields(mock) -> dict:
+    """Form fields of the single multipart request, keyed by part name."""
+    (method, path), kwargs = mock.call_args
+    return {"method": method, "path": path, **dict(kwargs["files"])}
+
+
+def test_create_requires_and_sends_speaker_consent():
+    client = KugelAudio(api_key="test_key")
+    with patch.object(
+        client, "_request_multipart", return_value={"id": 7, "name": "Anna"}
+    ) as m:
+        client.voices.create("Anna", "female", speaker_consent=True)
+
+    fields = _multipart_fields(m)
+    assert (fields["method"], fields["path"]) == ("POST", "/v1/voices")
+    _, metadata, content_type = fields["metadata"]
+    assert content_type == "application/json"
+    assert json.loads(metadata)["speaker_consent"] is True
+
+    with pytest.raises(TypeError, match="speaker_consent"):
+        client.voices.create("Anna", "female")  # type: ignore[call-arg]
+
+
+def test_create_sends_a_false_consent_for_the_server_to_refuse():
+    client = KugelAudio(api_key="test_key")
+    with patch.object(
+        client, "_request_multipart", return_value={"id": 7, "name": "Anna"}
+    ) as m:
+        client.voices.create("Anna", "female", speaker_consent=False)
+
+    _, metadata, _ = _multipart_fields(m)["metadata"]
+    assert json.loads(metadata)["speaker_consent"] is False
+
+
+def test_add_reference_requires_and_sends_speaker_consent(tmp_path):
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"\x01\x02\x03")
+    client = KugelAudio(api_key="test_key")
+    reference = {"id": 3, "voice_id": 7, "name": "ref.wav", "s3_path": "7/ref.wav"}
+    with patch.object(client, "_request_multipart", return_value=reference) as m:
+        result = client.voices.add_reference(
+            7, audio, speaker_consent=True, reference_text="Hallo"
+        )
+
+    assert isinstance(result, VoiceReference)
+    fields = _multipart_fields(m)
+    assert (fields["method"], fields["path"]) == ("POST", "/v1/voices/7/references")
+    assert fields["speaker_consent"] == (None, "true", "text/plain")
+    assert fields["reference_text"] == (None, "Hallo", "text/plain")
+
+    with pytest.raises(TypeError, match="speaker_consent"):
+        client.voices.add_reference(7, audio)  # type: ignore[call-arg]
