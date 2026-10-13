@@ -21,7 +21,7 @@ Example usage:
     from kugelaudio.livekit import TTS
     from livekit.agents.pipeline import VoicePipelineAgent
 
-    tts = TTS(api_key="your-api-key", model="kugel-3")
+    tts = TTS(api_key="your-api-key", model="kugel-3.5")
 
     agent = VoicePipelineAgent(
         tts=tts,

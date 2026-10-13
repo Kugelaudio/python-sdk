@@ -15,7 +15,7 @@ Example usage:
     # Generate audio (non-streaming)
     audio = client.tts.generate(
         text="Hello, world!",
-        model_id="kugel-3",
+        model_id="kugel-3.5",
         voice_id=123,
     )
     audio.save("output.wav")
@@ -23,7 +23,7 @@ Example usage:
     # Generate audio (streaming via WebSocket)
     for chunk in client.tts.stream(
         text="Hello, world!",
-        model_id="kugel-3",
+        model_id="kugel-3.5",
         voice_id=123,
     ):
         # Process audio chunk

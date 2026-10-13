@@ -192,7 +192,7 @@ class KugelAudioTTSService(TTSService):
         tts = KugelAudioTTSService(
             api_key="your-api-key",
             voice_id=280,
-            model="kugel-3",
+            model="kugel-3.5",
             sample_rate=24000,
         )
 
@@ -229,7 +229,7 @@ class KugelAudioTTSService(TTSService):
                 KUGELAUDIO_API_KEY environment variable. Prefix with
                 ``"eu-"`` to select the direct EU endpoint; the prefix is
                 stripped before auth.
-            model: TTS model to use. "kugel-3" is current; legacy
+            model: TTS model to use. "kugel-3.5" is current; legacy
                 ids are accepted as aliases.
             voice_id: Voice ID to use for synthesis.
             sample_rate: Output sample rate in Hz. Supported rates: 24000 (native),

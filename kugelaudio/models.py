@@ -527,7 +527,7 @@ class GenerateRequest:
     """Request for TTS generation."""
 
     text: str
-    model_id: str = "kugel-3"
+    model_id: str = "kugel-3.5"
     voice_id: Optional[int] = None
     cfg_scale: float = 2.0
     temperature: Optional[float] = None

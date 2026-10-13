@@ -18,11 +18,11 @@ from typing import Literal
 
 # Available TTS models. Legacy ids (kugel-2.5, kugel-2-turbo, kugel-1-turbo,
 # kugel-1) remain accepted for back-compat — server-side they all alias to
-# kugel-3 — but new code should use "kugel-3".
-TTSModels = Literal["kugel-3", "kugel-2.5", "kugel-2-turbo", "kugel-1-turbo", "kugel-1"]
+# kugel-3.5 — but new code should use "kugel-3.5".
+TTSModels = Literal["kugel-3.5", "kugel-3", "kugel-2.5", "kugel-2-turbo", "kugel-1-turbo", "kugel-1"]
 
-# Default model (matches the public API default; server-side is_default=kugel-3)
-DEFAULT_MODEL: TTSModels = "kugel-3"
+# Default model (matches the public API default, kugel-3.5)
+DEFAULT_MODEL: TTSModels = "kugel-3.5"
 
 # Supported sample rates
 # The model generates audio at 24kHz natively; other rates use server-side resampling

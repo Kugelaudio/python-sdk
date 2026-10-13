@@ -18,14 +18,14 @@ from typing import Literal, Union
 
 # Known model IDs — kept as a Literal for IDE autocomplete and static analysis.
 # Any str is also valid; new models added server-side do not require an SDK update.
-# Legacy ids all alias to kugel-3 server-side; new code should use "kugel-3".
-KnownTTSModel = Literal["kugel-3", "kugel-1-turbo", "kugel-1", "kugel-2-turbo", "kugel-2"]
+# Legacy ids all alias to kugel-3.5 server-side; new code should use "kugel-3.5".
+KnownTTSModel = Literal["kugel-3.5", "kugel-3", "kugel-1-turbo", "kugel-1", "kugel-2-turbo", "kugel-2"]
 
 # Accept known IDs or any arbitrary string for forward compatibility.
 TTSModels = Union[KnownTTSModel, str]
 
-# Default model (matches the public API default; server-side is_default=kugel-3)
-DEFAULT_MODEL: KnownTTSModel = "kugel-3"
+# Default model (matches the public API default, kugel-3.5)
+DEFAULT_MODEL: KnownTTSModel = "kugel-3.5"
 
 # Supported sample rates
 # The model generates audio at 24kHz natively; other rates use server-side resampling

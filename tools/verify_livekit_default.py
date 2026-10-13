@@ -33,7 +33,7 @@ async def _run_case(name: str, session: aiohttp.ClientSession, **kwargs: object)
     tts = TTS(
         api_key=API_KEY,
         base_url=BASE_URL,
-        model=str(kwargs.get("model", "kugel-3")),
+        model=str(kwargs.get("model", "kugel-3.5")),
         voice_id=VOICE_ID,
         sample_rate=24000,
         language="en",
@@ -55,14 +55,14 @@ async def main() -> int:
         print("SKIP: set KUGELAUDIO_API_KEY to run live verification", file=sys.stderr)
         return 2
 
-    assert DEFAULT_MODEL == "kugel-3", f"unexpected DEFAULT_MODEL={DEFAULT_MODEL}"
+    assert DEFAULT_MODEL == "kugel-3.5", f"unexpected DEFAULT_MODEL={DEFAULT_MODEL}"
 
     async with aiohttp.ClientSession() as session:
         # Customer default path (no word_timestamps kwarg)
         default = TTS(
             api_key=API_KEY,
             base_url=BASE_URL,
-            model="kugel-3",
+            model="kugel-3.5",
             voice_id=VOICE_ID,
             http_session=session,
         )

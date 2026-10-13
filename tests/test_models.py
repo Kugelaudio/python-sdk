@@ -89,7 +89,7 @@ class TestGenerateRequest:
         data = request.to_dict()
 
         assert data["text"] == "Hello world"
-        assert data["model_id"] == "kugel-3"
+        assert data["model_id"] == "kugel-3.5"
         assert data["cfg_scale"] == 2.0
         assert data["normalize"] is True
         assert "voice_id" not in data

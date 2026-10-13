@@ -25,7 +25,7 @@ client = KugelAudio(api_key="your_api_key")
 # Generate speech
 audio = client.tts.generate(
     text="Hello, world!",
-    model_id="kugel-3",
+    model_id="kugel-3.5",
     voice_id=1071,     # browse voices with client.voices.list()
     language="en",     # skip auto-detection (~150ms) when you know the language
 )
@@ -444,9 +444,10 @@ client = KugelAudio(
 
 | Model ID | Name | Best for |
 |----------|------|----------|
-| `kugel-3` | Kugel 3 | Voice agents, narration, brand voices, streaming, multilingual TTS |
+| `kugel-3.5` | Kugel 3.5 | Voice agents, phone conversations, narration, streaming, multilingual TTS. The default |
+| `kugel-3` | Kugel 3 | The previous model, still served |
 
-`kugel-3` is the current production model — use it for new integrations. Legacy
+`kugel-3.5` is the default model: use it for new integrations. Legacy
 IDs (`kugel-2.5`, `kugel-2-turbo`, `kugel-2`, `kugel-1`, `kugel-1-turbo`) are
 still accepted for backwards compatibility; see
 [Models](https://docs.kugelaudio.com/models).
@@ -505,7 +506,7 @@ Generate complete audio and receive it all at once:
 ```python
 audio = client.tts.generate(
     text="Hello, this is a test of the KugelAudio text-to-speech system.",
-    model_id="kugel-3",        # Current model (see "Available Models")
+    model_id="kugel-3.5",        # Current model (see "Available Models")
     voice_id=1071,             # Required: voice to speak with (client.voices.list())
     cfg_scale=2.0,             # Guidance scale (1.2-2.5)
     max_new_tokens=2048,       # Maximum tokens to generate
@@ -540,7 +541,7 @@ Receive audio chunks as they are generated for lower latency:
 # Synchronous streaming
 for item in client.tts.stream(
     text="Hello, this is streaming audio.",
-    model_id="kugel-3",
+    model_id="kugel-3.5",
     voice_id=1071,
     language="en",
 ):
@@ -564,7 +565,7 @@ import asyncio
 async def generate_speech():
     async for item in client.tts.stream_async(
         text="Async streaming example.",
-        model_id="kugel-3",
+        model_id="kugel-3.5",
         voice_id=1071,
         language="en",
     ):
@@ -583,7 +584,7 @@ import asyncio
 async def main():
     audio = await client.tts.generate_async(
         text="Async generation example.",
-        model_id="kugel-3",
+        model_id="kugel-3.5",
         voice_id=1071,
         language="en",
     )
@@ -663,7 +664,7 @@ import asyncio
 async def speak_turn(llm_token_stream):
     async with client.tts.streaming_session(
         voice_id=1071,
-        model_id="kugel-3",
+        model_id="kugel-3.5",
         language="en",
     ) as session:
         # Forward every LLM token directly. No flush=True per token —
@@ -690,7 +691,7 @@ asyncio.run(speak_turn(my_llm_stream()))
 ```python
 with client.tts.streaming_session_sync(
     voice_id=1071,
-    model_id="kugel-3",
+    model_id="kugel-3.5",
     language="en",
 ) as session:
     for token in llm_token_stream:
@@ -943,7 +944,7 @@ TTS model information:
 
 ```python
 class Model:
-    id: str                   # 'kugel-3' (or a legacy ID such as 'kugel-2.5')
+    id: str                   # 'kugel-3.5' (or a legacy ID such as 'kugel-2.5')
     name: str                 # Human-readable name
     description: str          # Model description
     max_input_length: int     # Maximum input characters
@@ -995,7 +996,7 @@ for voice in client.voices.list(limit=5).voices:
 print("\nGenerating audio...")
 audio = client.tts.generate(
     text="Welcome to KugelAudio. This is an example of high-quality text-to-speech synthesis.",
-    model_id="kugel-3",
+    model_id="kugel-3.5",
     voice_id=1071,
     language="en",
 )

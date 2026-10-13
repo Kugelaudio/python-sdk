@@ -837,7 +837,7 @@ class TTSResource:
     def generate(
         self,
         text: str,
-        model_id: str = "kugel-3",
+        model_id: str = "kugel-3.5",
         voice_id: Optional[int] = None,
         cfg_scale: float = 2.0,
         temperature: Optional[float] = None,
@@ -858,7 +858,7 @@ class TTSResource:
 
         Args:
             text: Text to synthesize
-            model_id: Model to use (e.g. 'kugel-3')
+            model_id: Model to use (e.g. 'kugel-3.5')
             voice_id: Voice ID to use
             cfg_scale: Classifier-free guidance scale. Clamped to [1.2, 2.5].
             max_new_tokens: Maximum tokens to generate
@@ -923,7 +923,7 @@ class TTSResource:
     def stream(
         self,
         text: str,
-        model_id: str = "kugel-3",
+        model_id: str = "kugel-3.5",
         voice_id: Optional[int] = None,
         cfg_scale: float = 2.0,
         temperature: Optional[float] = None,
@@ -946,7 +946,7 @@ class TTSResource:
 
         Args:
             text: Text to synthesize
-            model_id: Model to use (e.g. 'kugel-3')
+            model_id: Model to use (e.g. 'kugel-3.5')
             voice_id: Voice ID to use
             cfg_scale: Classifier-free guidance scale. Clamped to [1.2, 2.5].
             max_new_tokens: Maximum tokens to generate
@@ -1159,14 +1159,14 @@ class TTSResource:
                 self._ws_connection = None
                 self._ws_url = None
 
-    async def connect_async(self, model: str = "kugel-3") -> None:
+    async def connect_async(self, model: str = "kugel-3.5") -> None:
         """Pre-establish WebSocket connection for faster first request.
 
         Call this at application startup to eliminate cold start latency
         (~300-600ms) from your first TTS request.
 
         Args:
-            model: Model to connect for (e.g. 'kugel-3').
+            model: Model to connect for (e.g. 'kugel-3.5').
                    The connection is model-specific due to routing.
 
         Example:
@@ -1185,14 +1185,14 @@ class TTSResource:
         op.succeed()
         logger.info("WebSocket connection pre-established for model: %s", model)
 
-    def connect(self, model: str = "kugel-3") -> None:
+    def connect(self, model: str = "kugel-3.5") -> None:
         """Pre-establish WebSocket connection for faster first request (sync version).
 
         Call this at application startup to eliminate cold start latency
         (~300-600ms) from your first TTS request.
 
         Args:
-            model: Model to connect for (e.g. 'kugel-3').
+            model: Model to connect for (e.g. 'kugel-3.5').
                    The connection is model-specific due to routing.
 
         Example:
@@ -1246,7 +1246,7 @@ class TTSResource:
     async def stream_async(
         self,
         text: str,
-        model_id: str = "kugel-3",
+        model_id: str = "kugel-3.5",
         voice_id: Optional[int] = None,
         cfg_scale: float = 2.0,
         temperature: Optional[float] = None,
@@ -1267,7 +1267,7 @@ class TTSResource:
 
         Args:
             text: Text to synthesize
-            model_id: Model to use (e.g. 'kugel-3')
+            model_id: Model to use (e.g. 'kugel-3.5')
             voice_id: Voice ID to use
             cfg_scale: Classifier-free guidance scale. Clamped to [1.2, 2.5].
             max_new_tokens: Maximum tokens to generate
@@ -1338,7 +1338,7 @@ class TTSResource:
         op: Operation,
         *,
         text: str,
-        model_id: str = "kugel-3",
+        model_id: str = "kugel-3.5",
         voice_id: Optional[int] = None,
         cfg_scale: float = 2.0,
         temperature: Optional[float] = None,
@@ -1538,7 +1538,7 @@ class TTSResource:
 
         Args:
             voice_id: Voice ID to use
-            model_id: Model to use (e.g. "kugel-3")
+            model_id: Model to use (e.g. "kugel-3.5")
             cfg_scale: Classifier-free guidance scale. Clamped to [1.2, 2.5].
             max_new_tokens: Maximum tokens per generation
             sample_rate: Output sample rate
@@ -1619,7 +1619,7 @@ class TTSResource:
 
         Args:
             voice_id: Voice ID to use
-            model_id: Model to use (e.g. "kugel-3")
+            model_id: Model to use (e.g. "kugel-3.5")
             cfg_scale: Classifier-free guidance scale. Clamped to [1.2, 2.5].
             max_new_tokens: Maximum tokens per generation
             sample_rate: Output sample rate
@@ -1695,7 +1695,7 @@ class TTSResource:
 
         Args:
             default_voice_id: Default voice ID for new contexts
-            model_id: Model to use (e.g. "kugel-3")
+            model_id: Model to use (e.g. "kugel-3.5")
             sample_rate: Output sample rate (default 24000)
             cfg_scale: Classifier-free guidance scale. Clamped to [1.2, 2.5] (default 2.0).
             max_new_tokens: Maximum tokens to generate (default 2048)
@@ -1759,7 +1759,7 @@ class TTSResource:
     async def generate_async(
         self,
         text: str,
-        model_id: str = "kugel-3",
+        model_id: str = "kugel-3.5",
         voice_id: Optional[int] = None,
         cfg_scale: float = 2.0,
         temperature: Optional[float] = None,
@@ -1777,7 +1777,7 @@ class TTSResource:
 
         Args:
             text: Text to synthesize
-            model_id: Model to use (e.g. 'kugel-3')
+            model_id: Model to use (e.g. 'kugel-3.5')
             voice_id: Voice ID to use
             cfg_scale: Classifier-free guidance scale. Clamped to [1.2, 2.5].
             max_new_tokens: Maximum tokens to generate
@@ -1854,7 +1854,7 @@ class KugelAudio:
         # Generate audio
         audio = client.tts.generate(
             text="Hello, world!",
-            model_id="kugel-3",
+            model_id="kugel-3.5",
         )
         audio.save("output.wav")
     """
@@ -1961,7 +1961,7 @@ class KugelAudio:
         api_url: Optional[str] = None,
         tts_url: Optional[str] = None,
         timeout: float = 60.0,
-        model: str = "kugel-3",
+        model: str = "kugel-3.5",
         keepalive_ping_interval: Optional[float] = 20.0,
         region: Optional[str] = None,
         telemetry: Optional[bool] = None,
@@ -1976,7 +1976,7 @@ class KugelAudio:
             api_url: API base URL (default: https://api.kugelaudio.com)
             tts_url: TTS server URL (default: same as api_url)
             timeout: Request timeout in seconds
-            model: Model to pre-connect for (e.g. 'kugel-3')
+            model: Model to pre-connect for (e.g. 'kugel-3.5')
             keepalive_ping_interval: Seconds between WebSocket ping frames (default: 20.0).
             region: Deployment region. Use 'eu' for the direct EU endpoint.
 
@@ -2167,14 +2167,14 @@ class KugelAudio:
         # the event loop, so closing never stalls other coroutines.
         await asyncio.to_thread(self._diagnostics.close)
 
-    def connect(self, model: str = "kugel-3") -> None:
+    def connect(self, model: str = "kugel-3.5") -> None:
         """Pre-establish WebSocket connection for faster first request.
 
         Call this at application startup to eliminate cold start latency
         (~300-600ms) from your first TTS request.
 
         Args:
-            model: Model to connect for (e.g. 'kugel-3').
+            model: Model to connect for (e.g. 'kugel-3.5').
                    The connection is model-specific due to routing.
 
         Example:
@@ -2189,14 +2189,14 @@ class KugelAudio:
         """
         self.tts.connect(model)
 
-    async def connect_async(self, model: str = "kugel-3") -> None:
+    async def connect_async(self, model: str = "kugel-3.5") -> None:
         """Pre-establish WebSocket connection for faster first request (async).
 
         Call this at application startup to eliminate cold start latency
         (~300-600ms) from your first TTS request.
 
         Args:
-            model: Model to connect for (e.g. 'kugel-3').
+            model: Model to connect for (e.g. 'kugel-3.5').
                    The connection is model-specific due to routing.
 
         Example:

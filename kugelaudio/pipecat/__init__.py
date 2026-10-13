@@ -23,7 +23,7 @@ Example usage:
     tts = KugelAudioTTSService(
         api_key="your-api-key",
         voice_id=280,
-        model="kugel-3",
+        model="kugel-3.5",
     )
 
     # Use in a Pipecat pipeline
