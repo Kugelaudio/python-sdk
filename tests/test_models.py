@@ -45,6 +45,14 @@ def test_streaming_event_language_is_parsed_and_optional() -> None:
     assert partial.language is None
 
 
+def test_streaming_event_keeps_the_max_duration_turn_end() -> None:
+    event = StreamingTranscriptionEvent.from_dict(
+        {"partial_text": "text", "is_final": True, "turn_end_reason": "max_duration"}
+    )
+
+    assert event.turn_end_reason == "max_duration"
+
+
 class TestVoice:
     def test_from_dict_minimal(self):
         data = {
