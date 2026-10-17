@@ -226,6 +226,8 @@ class ASRResource:
         language: Optional[str] = None,
         model: Optional[str] = None,
         boosted_phrases: Optional[List[str]] = None,
+        project_id: Optional[int] = None,
+        dictionary_ids: Optional[List[int]] = None,
     ) -> TranscriptionResponse:
         """Transcribe one complete recording.
 
@@ -235,6 +237,11 @@ class ASRResource:
             boosted_phrases: Your vocabulary for this request: names, brands
                 and domain terms to spell as written. The server refuses a
                 list over its limits instead of shortening it.
+            project_id: The project whose dictionaries apply. Omit it to use
+                the API key's project.
+            dictionary_ids: The project dictionaries whose words are applied
+                as phrases after ``boosted_phrases``. Omit it to apply every
+                active dictionary of the project; ``[]`` applies none.
         """
         if not audio:
             raise ValidationError("ASR audio must not be empty")
@@ -247,6 +254,14 @@ class ASRResource:
             fields.append(("language", (None, language, "text/plain")))
         for phrase in boosted_phrases or []:
             fields.append(("boosted_phrases", (None, phrase, "text/plain")))
+        if project_id is not None:
+            fields.append(("project_id", (None, str(project_id), "text/plain")))
+        if dictionary_ids is not None:
+            # Repeated form fields cannot carry an empty list: one empty
+            # ``dictionary_ids`` field is the multipart spelling of ``[]``.
+            values = [str(i) for i in dictionary_ids] or [""]
+            for value in values:
+                fields.append(("dictionary_ids", (None, value, "text/plain")))
         response = self._client._request_multipart(
             "POST", "/v1/audio/transcriptions", fields
         )

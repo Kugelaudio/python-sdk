@@ -167,6 +167,81 @@ class TestASRResource:
             (None, "test-model", "text/plain")
         ]
 
+    def test_transcribe_sends_project_and_one_field_per_dictionary_id(self):
+        client = KugelAudio(api_key="test_key")
+        client._http_client.request = MagicMock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "text": "hi",
+                    "transcript": "hi",
+                    "language": "en",
+                    "duration_s": 1.0,
+                    "model": "test-model",
+                    "word_alternatives": [],
+                },
+            )
+        )
+
+        client.asr.transcribe(b"RIFFdata", project_id=42, dictionary_ids=[7, 9])
+
+        files = client._http_client.request.call_args.kwargs["files"]
+        assert [value for name, value in files if name == "project_id"] == [
+            (None, "42", "text/plain")
+        ]
+        assert [value for name, value in files if name == "dictionary_ids"] == [
+            (None, "7", "text/plain"),
+            (None, "9", "text/plain"),
+        ]
+
+    def test_transcribe_without_selection_sends_no_dictionary_fields(self):
+        client = KugelAudio(api_key="test_key")
+        client._http_client.request = MagicMock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "text": "hi",
+                    "transcript": "hi",
+                    "language": "en",
+                    "duration_s": 1.0,
+                    "model": "test-model",
+                    "word_alternatives": [],
+                },
+            )
+        )
+
+        client.asr.transcribe(b"RIFFdata")
+
+        names = [name for name, _ in client._http_client.request.call_args.kwargs["files"]]
+        assert "project_id" not in names
+        assert "dictionary_ids" not in names
+
+    def test_transcribe_sends_empty_selection_as_one_empty_field(self):
+        # Repeated form fields cannot carry []; one empty dictionary_ids field
+        # is the multipart spelling of "no dictionaries". Dropping it would
+        # apply every active dictionary instead.
+        client = KugelAudio(api_key="test_key")
+        client._http_client.request = MagicMock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "text": "hi",
+                    "transcript": "hi",
+                    "language": "en",
+                    "duration_s": 1.0,
+                    "model": "test-model",
+                    "word_alternatives": [],
+                },
+            )
+        )
+
+        client.asr.transcribe(b"RIFFdata", dictionary_ids=[])
+
+        files = client._http_client.request.call_args.kwargs["files"]
+        assert [value for name, value in files if name == "dictionary_ids"] == [
+            (None, "", "text/plain")
+        ]
+
     def test_transcribe_rejects_empty_audio_before_network(self):
         client = KugelAudio(api_key="test_key")
         client._http_client.request = MagicMock()
