@@ -81,7 +81,7 @@ class TestASRResource:
                     "transcript": "Ich heiße Müller.",
                     "language": "de",
                     "duration_s": 1.5,
-                    "model": "luchs-1",
+                    "model": "test-model",
                     "model_revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
                     "word_alternatives": [],
                 },
@@ -91,10 +91,13 @@ class TestASRResource:
         result = client.asr.transcribe(b"RIFFdata", language="de")
 
         assert result.text == "Ich heiße Müller."
+        assert result.model == "test-model"
         assert result.model_revision == "7278e1e70fe206f11671096ffdd38061171dd6e5"
         request = client._http_client.request.call_args.kwargs
         assert request["url"].endswith("/v1/audio/transcriptions")
-        assert ("model", (None, "luchs-1", "text/plain")) in request["files"]
+        assert ("language", (None, "de", "text/plain")) in request["files"]
+        # No model given: the field is left out and the API uses its default.
+        assert "model" not in [name for name, _ in request["files"]]
 
     def test_transcribe_sends_one_form_field_per_boosted_phrase(self):
         client = KugelAudio(api_key="test_key")
@@ -106,7 +109,7 @@ class TestASRResource:
                     "transcript": "Kargo",
                     "language": "en",
                     "duration_s": 1.0,
-                    "model": "luchs-1",
+                    "model": "test-model",
                     "word_alternatives": [],
                 },
             )
@@ -130,7 +133,7 @@ class TestASRResource:
                     "transcript": "hi",
                     "language": "en",
                     "duration_s": 1.0,
-                    "model": "luchs-1",
+                    "model": "test-model",
                     "word_alternatives": [],
                 },
             )
@@ -141,12 +144,35 @@ class TestASRResource:
         files = client._http_client.request.call_args.kwargs["files"]
         assert "boosted_phrases" not in [name for name, _ in files]
 
-    def test_transcribe_rejects_unknown_model_before_network(self):
+    def test_transcribe_sends_a_given_model_verbatim(self):
+        client = KugelAudio(api_key="test_key")
+        client._http_client.request = MagicMock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "text": "hi",
+                    "transcript": "hi",
+                    "language": "en",
+                    "duration_s": 1.0,
+                    "model": "test-model",
+                    "word_alternatives": [],
+                },
+            )
+        )
+
+        client.asr.transcribe(b"RIFFdata", model="test-model")
+
+        files = client._http_client.request.call_args.kwargs["files"]
+        assert [value for name, value in files if name == "model"] == [
+            (None, "test-model", "text/plain")
+        ]
+
+    def test_transcribe_rejects_empty_audio_before_network(self):
         client = KugelAudio(api_key="test_key")
         client._http_client.request = MagicMock()
 
         with pytest.raises(ValidationError):
-            client.asr.transcribe(b"RIFF", model="whisper-1")
+            client.asr.transcribe(b"", model="test-model")
 
         client._http_client.request.assert_not_called()
 

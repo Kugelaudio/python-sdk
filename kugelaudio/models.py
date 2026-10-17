@@ -16,9 +16,6 @@ logger = logging.getLogger(__name__)
 # clamped into the band (both client-side and by the server).
 MIN_CFG_SCALE = 1.2
 MAX_CFG_SCALE = 2.5
-# The only accepted/returned public ASR model identifier. Ingress mints this
-# name at the public boundary; there is no alias for any prior identifier.
-PUBLIC_ASR_MODEL_ID = "luchs-1"
 
 
 @dataclass(frozen=True)

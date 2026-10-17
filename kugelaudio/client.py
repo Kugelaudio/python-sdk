@@ -72,7 +72,6 @@ from kugelaudio.models import (
     GeneratedSample,
     GenerateRequest,
     Model,
-    PUBLIC_ASR_MODEL_ID,
     TranscriptionResponse,
     StreamConfig,
     Voice,
@@ -225,26 +224,25 @@ class ASRResource:
         filename: str = "audio.wav",
         content_type: str = "audio/wav",
         language: Optional[str] = None,
-        model: str = PUBLIC_ASR_MODEL_ID,
+        model: Optional[str] = None,
         boosted_phrases: Optional[List[str]] = None,
     ) -> TranscriptionResponse:
         """Transcribe one complete recording.
 
         Args:
+            model: The speech-to-text model ID, sent as given. Omit it to use
+                the API's default model.
             boosted_phrases: Your vocabulary for this request: names, brands
                 and domain terms to spell as written. The server refuses a
                 list over its limits instead of shortening it.
         """
         if not audio:
             raise ValidationError("ASR audio must not be empty")
-        if model != PUBLIC_ASR_MODEL_ID:
-            raise ValidationError(
-                f"Unsupported ASR model {model!r}; use {PUBLIC_ASR_MODEL_ID!r}"
-            )
         fields: List[Tuple[str, Tuple[Optional[str], Any, str]]] = [
             ("file", (filename, audio, content_type)),
-            ("model", (None, model, "text/plain")),
         ]
+        if model is not None:
+            fields.append(("model", (None, model, "text/plain")))
         if language is not None:
             fields.append(("language", (None, language, "text/plain")))
         for phrase in boosted_phrases or []:
