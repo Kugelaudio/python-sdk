@@ -167,21 +167,26 @@ class TurnDetector:
         self,
         language: TurnLanguage,
         *,
+        preset: str | None = None,
         action_delay_ms: int | None = None,
         timeout_ms: int | None = None,
     ) -> TurnSession:
         """Create cheap conversation state while sharing the loaded model weights.
 
-        ``action_delay_ms`` overrides the calibrated delay for applications that
-        prefer committing a confident completion as soon as the first score is
-        available. ``timeout_ms`` overrides the bundle's calibrated fallback.
+        ``preset`` runs this session on another calibrated preset of the bundle
+        policy (``None``: the detector's own); an unknown name raises
+        :class:`TurnBundleError`. ``action_delay_ms`` overrides the calibrated
+        delay for applications that prefer committing a confident completion as
+        soon as the first score is available. ``timeout_ms`` overrides the
+        bundle's calibrated fallback.
         """
+        policy = self.policy.select_preset(preset)
         try:
-            language_policy = self.policy.languages[language]
+            language_policy = policy.languages[language]
         except KeyError as exc:
             raise UnsupportedTurnLanguageError(
                 f"unsupported turn-detection language {language!r}; "
-                f"available: {', '.join(sorted(self.policy.languages))}"
+                f"available: {', '.join(sorted(policy.languages))}"
             ) from exc
         effective_action_delay_ms = (
             language_policy.action_delay_ms
@@ -191,10 +196,10 @@ class TurnDetector:
         effective_timeout_ms = (
             language_policy.timeout_ms if timeout_ms is None else timeout_ms
         )
-        if effective_action_delay_ms < self.policy.score_after_silence_ms:
+        if effective_action_delay_ms < policy.score_after_silence_ms:
             raise TurnStateError(
                 "action_delay_ms cannot precede score_after_silence_ms: "
-                f"{effective_action_delay_ms} < {self.policy.score_after_silence_ms}"
+                f"{effective_action_delay_ms} < {policy.score_after_silence_ms}"
             )
         if effective_timeout_ms <= 0:
             raise TurnStateError(
@@ -214,8 +219,8 @@ class TurnDetector:
         return TurnSession(
             self.predictor,
             language_policy,
-            score_after_silence_ms=self.policy.score_after_silence_ms,
-            end_turn_probability=self.policy.end_turn_probability,
+            score_after_silence_ms=policy.score_after_silence_ms,
+            end_turn_probability=policy.end_turn_probability,
         )
 
 

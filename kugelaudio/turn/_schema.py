@@ -289,8 +289,16 @@ class TurnPolicy(BaseModel):
                 f"unknown turn policy preset {preset!r}; available: "
                 + ", ".join(available)
             )
+        # The schedule being replaced stays under its name, so any preset can be
+        # selected from any other.
+        presets = {**self.presets, self.preset: self.languages}
+        del presets[preset]
         return self.model_copy(
-            update={"preset": preset, "languages": self.presets[preset]}
+            update={
+                "preset": preset,
+                "languages": self.presets[preset],
+                "presets": presets,
+            }
         )
 
     def _validate_language_timing(

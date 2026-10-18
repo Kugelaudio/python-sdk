@@ -264,6 +264,42 @@ def test_policy_selects_named_temporal_preset() -> None:
         policy.select_preset("missing")
 
 
+def _two_preset_policy() -> TurnPolicy:
+    raw = _policy().model_dump()
+    raw["schema_version"] = 2
+    raw["presets"] = {
+        "responsive": {
+            "en": {"threshold": 0.7, "action_delay_ms": 200, "timeout_ms": 1500}
+        }
+    }
+    return TurnPolicy.model_validate(raw)
+
+
+def test_selecting_a_preset_keeps_the_default_selectable() -> None:
+    policy = _two_preset_policy()
+
+    back = policy.select_preset("responsive").select_preset("conservative")
+
+    assert back.preset == "conservative"
+    assert back.languages == policy.languages
+
+
+def test_a_session_runs_the_preset_it_names() -> None:
+    detector = TurnDetector(
+        _Predictor(TurnProbabilities(1.0, 0.0, 0.0, 0.0)),
+        _two_preset_policy(),
+        variant_path="onnx/recommended",
+    )
+
+    responsive = detector.create_session("en", preset="responsive")
+    default = detector.create_session("en")
+
+    assert responsive.effective_timeout_ms == 1500
+    assert default.effective_timeout_ms == 2000
+    with pytest.raises(TurnBundleError, match="unknown turn policy preset"):
+        detector.create_session("en", preset="missing")
+
+
 @pytest.mark.parametrize("action_delay_ms", [199, 10001])
 def test_session_rejects_action_delay_outside_policy_bounds(
     action_delay_ms: int,
