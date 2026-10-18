@@ -306,27 +306,6 @@ finally:
     await bridge.aclose()
 ```
 
-To score a transformed signal, such as speech-enhanced audio, while STT keeps
-the raw microphone audio, pass `detector_audio`: an async function that takes
-the raw frames and yields mono frames for the same timeline at any latency.
-The bridge holds the end of speech until the transformed audio has caught up,
-at most `detector_audio_max_wait_ms` (default 1000), so the detector never
-scores a turn before its last word arrives. If the transform raises, the
-detector falls back to raw audio for the rest of the session and the error is
-logged.
-
-```python
-async def enhanced(frames: AsyncIterable[rtc.AudioFrame]):
-    async for frame in frames:
-        yield await my_enhancer.process(frame)  # same duration out as in
-
-
-bridge = KugelTurnBridge(detector, language="en", detector_audio=enhanced)
-```
-
-The end of each turn is delayed by however far the transform lags the raw
-audio; measure that delay before enabling it in production.
-
 On LiveKit Agents 1.5+, the equivalent non-deprecated configuration is
 `turn_handling=TurnHandlingOptions(turn_detection="manual")`. The bridge
 resamples mono LiveKit input to 16 kHz, accumulates interim/final transcripts,
