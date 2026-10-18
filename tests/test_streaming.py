@@ -709,23 +709,26 @@ class TestStreamingSessionConnectionClose:
         sent = [json.loads(m) for m in new_ws._sent]
         assert sent[0]["text"] == "hi" and "sample_rate" in sent[0]
         assert sent[1] == {"close": True}
-        assert session._session_ended is True
         assert session._session_stats["total_audio_seconds"] == 0.5
         assert session._turn_frames == []
 
     @pytest.mark.asyncio
-    async def test_restart_close_during_idle_drain_ends_quietly(self):
+    async def test_drain_with_no_turn_open_touches_no_socket(self):
+        """No turn open: drain() has nothing to end, so it sends no close
+        (production answers one with an empty ``session_closed`` that would
+        reach the next turn) and reads nothing."""
         session = StreamingSession(
             api_key="test", tts_url="http://localhost:8000"
         )
-        session._ws = _WSRaisingClose(1012, "server restarting")
+        ws = _WSRaisingClose(1012, "server restarting")
+        session._ws = ws
         session._is_started = True
         session._config_sent = True
 
         chunks = [c async for c in session.drain()]
         assert chunks == []
-        assert session._ws is None
-        assert session._session_ended is False
+        assert ws._sent == []
+        assert session._ws is ws
 
     @pytest.mark.asyncio
     async def test_restart_close_during_drain_after_audio_raises(self):
@@ -736,6 +739,7 @@ class TestStreamingSessionConnectionClose:
             [_make_audio_msg(idx=0), _FakeConnectionClosed(1012, "restart")]
         )
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
         session._config_sent = True
 
         with pytest.raises(ServerRestartingError):
@@ -750,6 +754,7 @@ class TestStreamingSessionConnectionClose:
         )
         session._ws = _WSRaisingClose(1000)
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
         session._config_sent = True
         await session.end_session()
         assert session._ws is None
@@ -779,6 +784,7 @@ class TestStreamingSessionClose:
         )
         session._ws = ws
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
 
         stats = await session.close()
 
@@ -822,6 +828,7 @@ class TestStreamingSessionClose:
         )
         session._ws = ws
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
 
         stats = await session.close()
 
@@ -856,6 +863,7 @@ class TestSessionUsage:
         session = StreamingSession(api_key="t", tts_url="http://localhost:8000")
         session._ws = ws
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
 
         await session.close()
 
@@ -890,6 +898,7 @@ class TestSessionUsage:
         session = StreamingSession(api_key="t", tts_url="http://localhost:8000")
         session._ws = ws
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
 
         await session.close()
 
@@ -907,6 +916,7 @@ class TestSessionUsage:
         session = StreamingSession(api_key="t", tts_url="http://localhost:8000")
         session._ws = ws
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
 
         await session.close()
 
@@ -983,6 +993,7 @@ class TestStreamingSessionDrain:
         )
         session._ws = ws
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
 
         chunks: List[AudioChunk] = []
         async for chunk in session.drain():
@@ -990,8 +1001,8 @@ class TestStreamingSessionDrain:
 
         assert len(chunks) == 2
         assert json.loads(ws._sent[0]) == {"close": True}
-        assert session._session_ended is True
         assert session._session_stats["total_audio_seconds"] == 1.5
+        assert session._turn_frames == []
 
     @pytest.mark.asyncio
     async def test_close_after_drain_returns_cached_stats_without_resend(self):
@@ -1013,6 +1024,7 @@ class TestStreamingSessionDrain:
         )
         session._ws = ws
         session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]  # an open turn
 
         async for _ in session.drain():
             pass
@@ -1024,7 +1036,7 @@ class TestStreamingSessionDrain:
         assert stats["session_closed"] is True
         assert stats["total_audio_seconds"] == 0.5
         assert session._ws is None
-        assert session._session_ended is False  # reset after consumption
+        assert session._session_stats == {}  # reset after consumption
 
     @pytest.mark.asyncio
     async def test_drain_on_already_closed_session_is_noop(self):

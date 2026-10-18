@@ -151,8 +151,27 @@ class TestAudioResponse:
         assert response.audio == b"\x00\x10\x00\x20"
         assert response.sample_rate == 24000
         assert response.samples == 2
-        assert response.duration_ms == 83.33
+        assert response.duration_ms == pytest.approx(2 / 24000 * 1000)
         assert response.usage is None
+
+    def test_from_chunks_counts_the_delivered_audio_not_the_native(self):
+        """The final frame's ``total_samples`` / ``dur_ms`` count the native
+        24 kHz audio before resampling, speed and G.711 encoding; the length
+        must come from the delivered chunks (mu-law 8 kHz at speed 1.2 here:
+        3 x 800 one-byte samples = 0.3 s, native 7200 samples / 360 ms)."""
+        chunks = [
+            AudioChunk(audio=b"\x7f" * 800, index=i, sample_rate=8000, samples=800)
+            for i in range(3)
+        ]
+        final_stats = {"total_samples": 7200, "dur_ms": 360.0, "gen_ms": 90.0}
+
+        response = AudioResponse.from_chunks(chunks, final_stats)
+
+        assert response.sample_rate == 8000
+        assert response.samples == 2400
+        assert response.duration_ms == pytest.approx(300.0)
+        assert response.duration_seconds == pytest.approx(0.3)
+        assert response.generation_ms == 90.0
 
     def test_from_chunks_parses_usage(self):
         chunk = AudioChunk(audio=b"\x00\x10", index=0, sample_rate=24000, samples=1)

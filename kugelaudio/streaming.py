@@ -316,9 +316,8 @@ class StreamingSession(_DiagnosedSession):
         self._pending_messages: List[Dict[str, Any]] = []
         self._on_word_timestamps = on_word_timestamps
         self._last_word_timestamps: List[WordTimestamp] = []
-        # drain() sets these so a subsequent end_session()/close() can return
-        # the same stats without re-running the close handshake.
-        self._session_ended = False
+        # ``session_closed`` payload of the last ended turn, kept until
+        # end_session()/close() returns it.
         self._session_stats: Dict[str, Any] = {}
         # Typed usage from the most recently closed session (KUG-1192).
         self._last_usage: Optional[SessionUsage] = None
@@ -336,6 +335,21 @@ class StreamingSession(_DiagnosedSession):
         self._turn_frames = []
         self._turn_audio = False
         self._turn_replayed = False
+
+    def _turn_open(self) -> bool:
+        """True while a turn is open: text or a flush went out since the
+        turn's ``session_closed`` (or a cancel) was last seen."""
+        return bool(self._turn_frames)
+
+    def _turn_flushed(self) -> bool:
+        """True when the open turn was flushed.
+
+        The server ends a flushed turn on its own with ``final`` and
+        ``session_closed``. A ``close`` on top of it would end a second,
+        empty session whose ``session_closed`` (0 s, no usage) then reaches
+        the next turn as a stale frame.
+        """
+        return bool(self._turn_frames) and self._turn_frames[-1].get("flush") is True
 
     def _forget_socket(self) -> None:
         """Drop a dead socket so the next :meth:`send` reconnects."""
@@ -681,18 +695,20 @@ class StreamingSession(_DiagnosedSession):
                 raise
 
     async def drain(self) -> AsyncIterator[AudioChunk]:
-        """Signal end-of-input and yield any remaining audio chunks.
+        """End the turn's input and yield its remaining audio chunks.
 
-        Sends ``{"close": true}`` once, then yields every audio chunk the
-        server emits until it responds with ``session_closed``. Use this
-        before exiting the session if you need the tail audio that the
+        An unflushed turn is ended with ``{"close": true}``; a flushed one
+        (the server ends it on its own) is only read to its end. Either way
+        this yields every audio chunk the server emits until it responds
+        with ``session_closed``. With no turn open it yields nothing. Use
+        this before exiting the session if you need the tail audio that the
         server still has in flight — otherwise :meth:`close` /
         :meth:`end_session` will silently discard those chunks (KUG-421).
 
-        After ``drain()`` completes the server-side session has ended and
-        the next :meth:`send` will start a fresh session on the same
-        WebSocket. Stats are captured and returned by the subsequent
-        :meth:`end_session` / :meth:`close` call.
+        After ``drain()`` completes the turn has ended and the next
+        :meth:`send` starts a fresh one on the same WebSocket. Stats are
+        captured and returned by the subsequent :meth:`end_session` /
+        :meth:`close` call.
 
         Example:
             async with client.tts.streaming_session(voice_id=123) as session:
@@ -702,7 +718,7 @@ class StreamingSession(_DiagnosedSession):
                 async for chunk in session.drain():
                     play(chunk)
         """
-        if not self._ws or self._session_ended:
+        if not self._ws or not self._turn_open():
             return
         async for chunk in self._within_turn(
             self._live_turn(), STAGE_FINALIZING, self._drain_frames()
@@ -711,13 +727,13 @@ class StreamingSession(_DiagnosedSession):
 
     async def _drain_frames(self) -> AsyncIterator[AudioChunk]:
         """The close-handshake drain behind :meth:`drain`."""
-        if not self._ws or self._session_ended:
+        if not self._ws or not self._turn_open():
             return
 
-        self._session_ended = True
         replay = False
         try:
-            await self._ws.send(json.dumps({"close": True}))
+            if not self._turn_flushed():
+                await self._ws.send(json.dumps({"close": True}))
 
             while True:
                 msg = await asyncio.wait_for(
@@ -753,7 +769,6 @@ class StreamingSession(_DiagnosedSession):
                     # Rolling deploy: the close handshake never completed.
                     # Replay the unspoken turn on a fresh socket and drain
                     # again; raises when audio already went out.
-                    self._session_ended = False
                     replay = await self._recover_from_restart(e)
             else:
                 raise
@@ -773,27 +788,31 @@ class StreamingSession(_DiagnosedSession):
 
         Audio chunks the server still has in flight at close time are
         silently discarded — see :meth:`drain` for the opt-in tail-drain
-        path (KUG-421). If :meth:`drain` has already been called, this
-        method returns the stats captured there without re-running the
-        close handshake.
+        path (KUG-421). An unflushed turn is ended with ``close``; a flushed
+        one is read to its end. When the turn already ended (a flushed
+        :meth:`send` read to its end, or :meth:`drain`), this returns the
+        stats captured then without another close handshake.
 
         Returns:
             Session statistics from the ended session
         """
-        if self._session_ended:
+        if not self._turn_open():
             stats = self._session_stats
-            self._session_ended = False
             self._session_stats = {}
             self._config_sent = False
             self._last_word_timestamps = []
             return stats
 
-        stats: Dict[str, Any] = {}
+        stats = {}
         if not self._ws:
+            # The socket died with the turn open: the server-side turn is
+            # gone with it, so a later replay must not resend its frames.
+            self._reset_turn()
             return stats
 
         try:
-            await self._ws.send(json.dumps({"close": True}))
+            if not self._turn_flushed():
+                await self._ws.send(json.dumps({"close": True}))
 
             while True:
                 msg = await asyncio.wait_for(
@@ -857,8 +876,7 @@ class StreamingSession(_DiagnosedSession):
         # not a failure: no event, only the ``sdk_stats`` cancellation count.
         self._cancel_turn()
 
-        # A pending drain()/end_session() handshake is moot once we barge in.
-        self._session_ended = False
+        # Stats of an earlier turn are moot once we barge in.
         self._session_stats = {}
         self._reset_turn()
 
@@ -1003,8 +1021,10 @@ class StreamingSession(_DiagnosedSession):
     async def close(self) -> Dict[str, Any]:
         """Close the session and the WebSocket connection.
 
-        Sends a close command, drains messages until the server responds
-        with ``session_closed``, then closes the WebSocket. Audio chunks
+        Ends the open turn like :meth:`end_session` (a ``close`` command for
+        an unflushed turn, none for a flushed or finished one), reads until
+        the server responds with ``session_closed``, then closes the
+        WebSocket. Audio chunks
         the server emits during this final drain are silently discarded
         — call :meth:`drain` first if you need them (KUG-421).
 

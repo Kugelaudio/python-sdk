@@ -800,15 +800,23 @@ class AudioResponse:
         final_stats: Dict[str, Any],
         word_timestamps: Optional[List["WordTimestamp"]] = None,
     ) -> "AudioResponse":
-        """Create from collected chunks and final stats."""
+        """Create from collected chunks and final stats.
+
+        ``samples`` and ``duration_ms`` count the delivered audio: each
+        chunk's ``samples`` is its wire sample count at its ``sample_rate``.
+        The final frame's ``total_samples`` / ``dur_ms`` are not used; they
+        count the native 24 kHz audio before resampling, the speed change
+        and G.711 encoding.
+        """
         all_audio = b"".join(c.audio for c in chunks)
         sample_rate = chunks[0].sample_rate if chunks else 24000
+        samples = sum(c.samples for c in chunks)
         usage = SessionUsage.from_session_payload(final_stats)
         return cls(
             audio=all_audio,
             sample_rate=sample_rate,
-            samples=final_stats.get("total_samples", len(all_audio) // 2),
-            duration_ms=final_stats.get("dur_ms", 0.0),
+            samples=samples,
+            duration_ms=1000.0 * samples / sample_rate,
             generation_ms=final_stats.get("gen_ms", 0.0),
             rtf=final_stats.get("rtf", 0.0),
             word_timestamps=word_timestamps or [],
