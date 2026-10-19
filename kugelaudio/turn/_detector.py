@@ -170,7 +170,6 @@ class TurnDetector:
         preset: str | None = None,
         action_delay_ms: int | None = None,
         timeout_ms: int | None = None,
-        hold_on_wait: bool = False,
     ) -> TurnSession:
         """Create cheap conversation state while sharing the loaded model weights.
 
@@ -179,9 +178,7 @@ class TurnDetector:
         :class:`TurnBundleError`. ``action_delay_ms`` overrides the calibrated
         delay for applications that prefer committing a confident completion as
         soon as the first score is available. ``timeout_ms`` overrides the
-        bundle's calibrated fallback. ``hold_on_wait`` keeps a pause open past
-        that fallback while the model's latest call is ``wait`` (the speaker
-        asked for a moment), until speech resumes.
+        bundle's calibrated fallback.
         """
         policy = self.policy.select_preset(preset)
         try:
@@ -224,7 +221,6 @@ class TurnDetector:
             language_policy,
             score_after_silence_ms=policy.score_after_silence_ms,
             end_turn_probability=policy.end_turn_probability,
-            hold_on_wait=hold_on_wait,
         )
 
 
@@ -238,13 +234,11 @@ class TurnSession:
         *,
         score_after_silence_ms: int,
         end_turn_probability: str = "complete",
-        hold_on_wait: bool = False,
     ) -> None:
         self._predictor = predictor
         self._policy = policy
         self._score_after_silence_ms = score_after_silence_ms
         self._end_turn_probability = end_turn_probability
-        self._hold_on_wait = hold_on_wait
         self._sample_rate = 16000
         self._window_samples = 128000
         # eot-bench (KUG-1379) surfaced a customer-bundle case where the model
@@ -492,13 +486,6 @@ class TurnSession:
                 self._reset_turn_locked()
             return decision
 
-    def _waiting(self) -> bool:
-        """The session holds on ``wait`` and the latest score's top class is it."""
-        if not self._hold_on_wait or self._probabilities is None:
-            return False
-        scores = self._probabilities.as_dict()
-        return max(scores, key=scores.__getitem__) == "wait"
-
     def _evaluate_cached_decision(
         self,
         duration_ms: int,
@@ -531,7 +518,7 @@ class TurnSession:
                 self._scored_transcript,
                 self._decision_threshold,
             )
-        if duration_ms >= self._policy.timeout_ms and not self._waiting():
+        if duration_ms >= self._policy.timeout_ms:
             self._ended = True
             return TurnDecision(
                 True,

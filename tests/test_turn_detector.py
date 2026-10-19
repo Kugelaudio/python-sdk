@@ -525,49 +525,6 @@ def test_incomplete_uses_timeout_fallback() -> None:
     assert predictor.calls == 1
 
 
-def _waiting_session(*, hold_on_wait: bool, wait: float) -> TurnSession:
-    predictor = _Predictor(
-        TurnProbabilities(
-            complete=0.1, incomplete=0.9 - wait, backchannel=0.0, wait=wait
-        )
-    )
-    session = TurnSession(
-        predictor,
-        LanguagePolicy(threshold=0.6, action_delay_ms=600, timeout_ms=2000),
-        score_after_silence_ms=200,
-        hold_on_wait=hold_on_wait,
-    )
-    session.push_audio(np.ones(1600, dtype=np.float32) * 0.1)
-    session.update_transcript("still speaking")
-    return session
-
-
-def test_a_wait_call_holds_the_turn_past_its_timeout() -> None:
-    session = _waiting_session(hold_on_wait=True, wait=0.7)
-
-    session.observe_silence(200)
-    decision = session.observe_silence(5000)
-
-    assert decision.end_turn is False
-    assert decision.reason is TurnDecisionReason.MODEL_HOLD
-
-
-def test_a_wait_call_times_out_unless_the_session_holds_on_wait() -> None:
-    session = _waiting_session(hold_on_wait=False, wait=0.7)
-
-    session.observe_silence(200)
-
-    assert session.observe_silence(2000).reason is TurnDecisionReason.TIMEOUT
-
-
-def test_holding_on_wait_still_times_out_when_wait_is_not_the_top_call() -> None:
-    session = _waiting_session(hold_on_wait=True, wait=0.3)
-
-    session.observe_silence(200)
-
-    assert session.observe_silence(2000).reason is TurnDecisionReason.TIMEOUT
-
-
 def test_speech_resume_cancels_and_rescores() -> None:
     session, predictor = _session(0.8)
 
