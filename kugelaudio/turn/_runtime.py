@@ -40,6 +40,12 @@ def _execution_providers(
                     "do_copy_in_default_stream": "1",
                     # Keep the CPU-calibrated policy numerically comparable.
                     "use_tf32": "0",
+                    # The default kNextPowerOfTwo doubles every new arena
+                    # region and, when that does not fit, backs off until it
+                    # does, so one burst of concurrent runs claims nearly all
+                    # free GPU memory and the arena never returns it. Grow by
+                    # the request so the arena holds what the runs needed.
+                    "arena_extend_strategy": "kSameAsRequested",
                 },
             ),
             # The qualified graphs intentionally leave small dynamic-shape

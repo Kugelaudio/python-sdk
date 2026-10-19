@@ -80,10 +80,22 @@ def test_cuda_provider_uses_device_zero_with_explicit_shape_fallback() -> None:
                 "device_id": "0",
                 "do_copy_in_default_stream": "1",
                 "use_tf32": "0",
+                "arena_extend_strategy": "kSameAsRequested",
             },
         ),
         "CPUExecutionProvider",
     ]
+
+
+def test_cuda_arena_grows_by_the_request_not_by_doubling() -> None:
+    """ORT's default kNextPowerOfTwo doubles each new arena region and, when the
+    doubled region does not fit, backs off in 10% steps until it does: one
+    burst of concurrent runs takes nearly all free GPU memory, and the arena
+    never gives it back (ENG-1447). The arena must grow by what a run asks for.
+    """
+    options = dict(_execution_providers("cuda", cpu_threads=4)[0][1])
+
+    assert options["arena_extend_strategy"] == "kSameAsRequested"
 
 
 @dataclass(slots=True)
