@@ -29,6 +29,12 @@ Example usage:
     # Use in a Pipecat pipeline
     pipeline = Pipeline([..., tts, ...])
 
+Streaming speech to text; the server ends each turn:
+    from kugelaudio.pipecat import KugelAudioSTTService
+
+    stt = KugelAudioSTTService(language="de")
+    pipeline = Pipeline([transport.input(), stt, user_aggregator, llm, tts, ...])
+
 Speech enhancement (noise removal) as an input audio filter:
     from kugelaudio.pipecat import KugelAudioEnhanceFilter
 
@@ -44,6 +50,7 @@ if TYPE_CHECKING:
     from kugelaudio.pipecat.enhance import (
         KugelAudioEnhanceFilter as KugelAudioEnhanceFilter,
     )
+    from kugelaudio.pipecat.stt import KugelAudioSTTService as KugelAudioSTTService
     from kugelaudio.pipecat.tts import KugelAudioTTSService as KugelAudioTTSService
     from kugelaudio.pipecat.models import TTSModels as TTSModels
     from kugelaudio.pipecat.turn import KugelTurnStopStrategy as KugelTurnStopStrategy
@@ -71,6 +78,12 @@ def __getattr__(name: str):
         from kugelaudio.pipecat.tts import KugelAudioTTSService
 
         return KugelAudioTTSService
+
+    if name == "KugelAudioSTTService":
+        _check_pipecat_installed()
+        from kugelaudio.pipecat.stt import KugelAudioSTTService
+
+        return KugelAudioSTTService
 
     if name == "KugelAudioEnhanceFilter":
         _check_pipecat_installed()
@@ -117,6 +130,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "KugelAudioTTSService",
+    "KugelAudioSTTService",
     "KugelAudioEnhanceFilter",
     "TTSModels",
     "KugelTurnStopStrategy",

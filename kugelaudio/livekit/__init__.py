@@ -15,7 +15,7 @@
 """
 KugelAudio LiveKit Agents Plugin.
 
-This module provides integration between KugelAudio TTS and LiveKit Agents.
+This module provides integration between KugelAudio TTS / STT and LiveKit Agents.
 
 Example usage:
     from kugelaudio.livekit import TTS
@@ -25,6 +25,18 @@ Example usage:
 
     agent = VoicePipelineAgent(
         tts=tts,
+        ...
+    )
+
+Speech to text, with the server's end of turn driving the turns:
+    from kugelaudio.livekit import STT
+    from livekit.agents import AgentSession
+    from livekit.plugins import silero
+
+    session = AgentSession(
+        stt=STT(language="en"),
+        turn_handling={"turn_detection": "stt"},
+        vad=silero.VAD.load(),
         ...
     )
 
@@ -52,6 +64,10 @@ if TYPE_CHECKING:
         ChunkedStream as ChunkedStream,
         SynthesizeStream as SynthesizeStream,
     )
+    from kugelaudio.livekit.stt import (
+        STT as STT,
+        SpeechStream as SpeechStream,
+    )
     from kugelaudio.livekit.enhance import (
         EnhanceFrameProcessor as EnhanceFrameProcessor,
         enhancement as enhancement,
@@ -75,7 +91,7 @@ def _check_livekit_installed() -> None:
 
 # Lazy imports to avoid requiring livekit-agents when just importing the SDK
 def __getattr__(name: str):
-    """Lazy import TTS and related classes."""
+    """Lazy import TTS, STT and related classes."""
     if name in ("TTS", "ChunkedStream", "SynthesizeStream"):
         _check_livekit_installed()
         from kugelaudio.livekit.tts import TTS, ChunkedStream, SynthesizeStream
@@ -85,6 +101,12 @@ def __getattr__(name: str):
             "ChunkedStream": ChunkedStream,
             "SynthesizeStream": SynthesizeStream,
         }[name]
+
+    if name in ("STT", "SpeechStream"):
+        _check_livekit_installed()
+        from kugelaudio.livekit import stt
+
+        return getattr(stt, name)
 
     if name in ("EnhanceFrameProcessor", "enhancement"):
         _check_livekit_installed()
@@ -144,6 +166,8 @@ __all__ = [
     "TTS",
     "ChunkedStream",
     "SynthesizeStream",
+    "STT",
+    "SpeechStream",
     "EnhanceFrameProcessor",
     "enhancement",
     "TTSModels",

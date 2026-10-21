@@ -321,6 +321,37 @@ contains the transcript, threshold, four class probabilities, silence duration,
 and `inference_ms` when a new model score was computed. Keep the callback
 non-blocking; enqueue network or storage work instead of performing it inline.
 
+### LiveKit speech to text
+
+`kugelaudio.livekit.STT` streams the user's audio to KugelAudio speech to text.
+The server ends each turn itself, so let its turns drive the session with
+`turn_handling={"turn_detection": "stt"}` (`turn_detection="stt"` on older
+`livekit-agents` releases; no local turn model needed):
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import silero
+
+from kugelaudio.livekit import STT
+
+session = AgentSession(
+    stt=STT(language="en"),  # reads KUGELAUDIO_API_KEY
+    turn_handling={"turn_detection": "stt"},
+    vad=silero.VAD.load(),
+    llm=llm,
+    tts=tts,
+)
+```
+
+Options (all optional, unset ones are not sent): `api_key`, `region`,
+`base_url`, `model`, `language` (a code, a list of codes, or `"auto"`),
+`turn_detection` (`"kugelturn"`, `"vad"` or `"manual"`),
+`turn_detection_level` (`"responsive"` or `"conservative"`), `boosted_phrases`,
+`project_id`, `dictionary_ids` and `sample_rate` (default 16000; input is
+resampled to it). Transcripts carry `language` when it is one code other than
+`"auto"`, else an empty language. `STT.recognize()` transcribes a complete
+recording over HTTP.
+
 ### Pipecat
 
 Install the Pipecat and turn-detection extras:
@@ -369,6 +400,34 @@ native `InputAudioRawFrame`, transcription, and VAD frames, explicitly rejects
 multichannel input, resamples mono PCM to 16 kHz, and emits Pipecat's standard
 `on_user_turn_stopped` event. For Pipecat 0.x releases whose VAD stop frame does
 not carry its own duration, keep `vad_silence_ms` equal to `VADParams.stop_secs`.
+
+### Pipecat speech to text
+
+`KugelAudioSTTService` streams the user's audio to KugelAudio speech to text
+over one connection per call. The server ends each turn itself, so the service
+emits the turn frames and no local VAD or turn analyzer is needed:
+
+```python
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
+from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
+
+from kugelaudio.pipecat import KugelAudioSTTService
+
+stt = KugelAudioSTTService(language="en")  # reads KUGELAUDIO_API_KEY
+user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+    context,
+    user_params=LLMUserAggregatorParams(
+        user_turn_strategies=ExternalUserTurnStrategies(),  # implied on Pipecat 1.11+
+    ),
+)
+```
+
+It takes the same options as the LiveKit STT. An `STTUpdateSettingsFrame` whose
+delta sets `model` or `language` reconnects the stream; a turn in progress is
+dropped, and options the update does not name stay as they were.
 
 ## Client Configuration
 

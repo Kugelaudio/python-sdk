@@ -1,4 +1,4 @@
-"""Minimal Pipecat 1.x voice bot using KugelAudio TTS + local mic/speaker.
+"""Minimal Pipecat 1.x voice bot using KugelAudio STT and TTS + local mic/speaker.
 
 Uses headphones or low speaker volume recommended — local transport has
 no echo cancellation, so speaker output can feed back into the mic.
@@ -8,7 +8,7 @@ if speaker echo triggers false cutoffs (use headphones instead).
 Setup (Python 3.11+, once):
     cd packages/public/python-sdk
     uv sync --extra pipecat --extra tools --python 3.12
-    uv pip install "pipecat-ai[deepgram,local]"
+    uv pip install "pipecat-ai[local,openai]"
 
 Run:
     cd packages/public/python-sdk && uv run python examples/pipecat_local_bot.py
@@ -23,8 +23,6 @@ import sys
 from dotenv import load_dotenv
 from loguru import logger
 
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -32,16 +30,17 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
 )
-from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.local.audio import (
     LocalAudioTransport,
     LocalAudioTransportParams,
 )
+from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from kugelaudio.pipecat import KugelAudioTTSService
+from kugelaudio.pipecat import KugelAudioSTTService, KugelAudioTTSService
 
 
 async def main():
@@ -51,14 +50,12 @@ async def main():
     kugelaudio_key = os.environ.get("KUGELAUDIO_API_KEY")
     kugelaudio_base_url = os.environ.get("KUGELAUDIO_BASE_URL")
     openai_key = os.environ.get("OPENAI_API_KEY")
-    deepgram_key = os.environ.get("DEEPGRAM_API_KEY")
 
     missing = [
         name
         for name, val in [
             ("KUGELAUDIO_API_KEY", kugelaudio_key),
             ("OPENAI_API_KEY", openai_key),
-            ("DEEPGRAM_API_KEY", deepgram_key),
         ]
         if not val
     ]
@@ -73,19 +70,14 @@ async def main():
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_out_sample_rate=24000,
-            vad_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(
-                params=VADParams(
-                    confidence=0.8,
-                    start_secs=0.3,
-                    stop_secs=1.0,
-                    min_volume=0.5,
-                )
-            ),
         )
     )
 
-    stt = DeepgramSTTService(api_key=deepgram_key)
+    # KugelAudio's server decides when the user has finished; no local VAD.
+    stt_kwargs: dict = {"api_key": kugelaudio_key, "language": "en"}
+    if kugelaudio_base_url:
+        stt_kwargs["base_url"] = kugelaudio_base_url
+    stt = KugelAudioSTTService(**stt_kwargs)
 
     llm = OpenAILLMService(
         api_key=openai_key,
@@ -114,7 +106,13 @@ async def main():
     tts.prewarm()
 
     context = LLMContext()
-    context_aggregator = LLMContextAggregatorPair(context)
+    context_aggregator = LLMContextAggregatorPair(
+        context,
+        # The STT's server-side turns drive the conversation.
+        user_params=LLMUserAggregatorParams(
+            user_turn_strategies=ExternalUserTurnStrategies()
+        ),
+    )
 
     pipeline = Pipeline(
         [
