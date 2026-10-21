@@ -65,6 +65,7 @@ from kugelaudio._diagnostics import (
 )
 from kugelaudio._sdk_metadata import sdk_headers, sdk_query_string
 from kugelaudio._http import HTTP_LIMITS, SharedAsyncHttp
+from kugelaudio.asr import ASRResource
 from kugelaudio.enhance import EnhanceResource
 from kugelaudio.models import (
     AudioChunk,
@@ -72,7 +73,6 @@ from kugelaudio.models import (
     GeneratedSample,
     GenerateRequest,
     Model,
-    TranscriptionResponse,
     StreamConfig,
     Voice,
     VoiceDetail,
@@ -209,63 +209,6 @@ class ModelsResource:
         """
         response = self._client._request("GET", "/v1/models")
         return [Model.from_dict(m) for m in response.get("models", [])]
-
-
-class ASRResource:
-    """Speech-to-text uploads through the public KugelAudio ingress."""
-
-    def __init__(self, client: KugelAudio):
-        self._client = client
-
-    def transcribe(
-        self,
-        audio: bytes,
-        *,
-        filename: str = "audio.wav",
-        content_type: str = "audio/wav",
-        language: Optional[str] = None,
-        model: Optional[str] = None,
-        boosted_phrases: Optional[List[str]] = None,
-        project_id: Optional[int] = None,
-        dictionary_ids: Optional[List[int]] = None,
-    ) -> TranscriptionResponse:
-        """Transcribe one complete recording.
-
-        Args:
-            model: The speech-to-text model ID, sent as given. Omit it to use
-                the API's default model.
-            boosted_phrases: Your vocabulary for this request: names, brands
-                and domain terms to spell as written. The server refuses a
-                list over its limits instead of shortening it.
-            project_id: The project whose dictionaries apply. Omit it to use
-                the API key's project.
-            dictionary_ids: The project dictionaries whose words are applied
-                as phrases after ``boosted_phrases``. Omit it to apply every
-                active dictionary of the project; ``[]`` applies none.
-        """
-        if not audio:
-            raise ValidationError("ASR audio must not be empty")
-        fields: List[Tuple[str, Tuple[Optional[str], Any, str]]] = [
-            ("file", (filename, audio, content_type)),
-        ]
-        if model is not None:
-            fields.append(("model", (None, model, "text/plain")))
-        if language is not None:
-            fields.append(("language", (None, language, "text/plain")))
-        for phrase in boosted_phrases or []:
-            fields.append(("boosted_phrases", (None, phrase, "text/plain")))
-        if project_id is not None:
-            fields.append(("project_id", (None, str(project_id), "text/plain")))
-        if dictionary_ids is not None:
-            # Repeated form fields cannot carry an empty list: one empty
-            # ``dictionary_ids`` field is the multipart spelling of ``[]``.
-            values = [str(i) for i in dictionary_ids] or [""]
-            for value in values:
-                fields.append(("dictionary_ids", (None, value, "text/plain")))
-        response = self._client._request_multipart(
-            "POST", "/v1/audio/transcriptions", fields
-        )
-        return TranscriptionResponse.from_dict(response)
 
 
 class VoicesResource:
