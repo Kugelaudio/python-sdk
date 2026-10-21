@@ -40,8 +40,8 @@ WS_CLOSE_MODEL_UNAVAILABLE = 4500
 WS_CLOSE_SERVICE_RESTART = 1012
 WS_CLOSE_TRY_AGAIN_LATER = 1013
 
-_API_KEYS_URL = "https://app.kugelaudio.com/settings/api-keys"
-_BILLING_URL = "https://app.kugelaudio.com/billing"
+_API_KEYS_URL = "https://www.kugelaudio.com/dashboard"
+_BILLING_URL = "https://www.kugelaudio.com/dashboard"
 
 
 class KugelAudioError(Exception):

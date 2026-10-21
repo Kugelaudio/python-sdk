@@ -234,4 +234,4 @@ class TestClientConstructorMessage:
         # The SDK never reads an env var, so the message must not suggest one.
         assert "KUGELAUDIO_API_KEY" not in msg
         assert "api_key" in msg
-        assert "https://app.kugelaudio.com/settings/api-keys" in msg
+        assert "https://www.kugelaudio.com/dashboard" in msg

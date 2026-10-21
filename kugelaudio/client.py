@@ -1864,7 +1864,7 @@ class KugelAudio:
         if not api_key:
             raise ValidationError(
                 "KugelAudio API key is missing. Pass api_key=... to the "
-                "client. Get a key at https://app.kugelaudio.com/settings/api-keys."
+                "client. Get a key at https://www.kugelaudio.com/dashboard."
             )
 
         clean_key, detected_region = _parse_api_key(api_key)
