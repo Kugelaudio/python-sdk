@@ -1109,18 +1109,20 @@ empty, non-finite, and out-of-range audio raises `WatermarkAudioError` instead
 of being silently coerced, because each of those would change the verdict you
 are about to act on.
 
-## Agent skill
+## Agent skills
 
-If you build with a coding agent, install the bundled skill so it gets the TTFA
-rules, streaming semantics, and text-formatting constraints without you
-re-explaining them:
+If you build with a coding agent, install the bundled skills. `kugelaudio-tts`
+gives it the TTFA rules, streaming semantics, and text-formatting constraints
+without you re-explaining them; `kugelaudio-agents` builds a voice agent with the
+Curb framework, from an empty folder to a deployed hosted agent:
 
 ```bash
-kugelaudio-skills install     # → ./.claude/skills/kugelaudio-tts/
+kugelaudio-skills install     # → ./.claude/skills/kugelaudio-tts/ and kugelaudio-agents/
 ```
 
 `--global` installs to `~/.claude/skills/`, and `--dest <dir>` selects another
-target.
+target. [Agent skills](https://docs.kugelaudio.com/guides/agent-skill) has the
+details.
 
 ## License
 
