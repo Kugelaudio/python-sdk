@@ -1111,13 +1111,12 @@ are about to act on.
 
 ## Agent skills
 
-If you build with a coding agent, install the bundled skills. `kugelaudio-tts`
+If you build with a coding agent, install the bundled skill. `kugelaudio-tts`
 gives it the TTFA rules, streaming semantics, and text-formatting constraints
-without you re-explaining them; `kugelaudio-agents` builds a voice agent with the
-Curb framework, from an empty folder to a deployed hosted agent:
+without you re-explaining them:
 
 ```bash
-kugelaudio-skills install     # → ./.claude/skills/kugelaudio-tts/ and kugelaudio-agents/
+kugelaudio-skills install     # → ./.claude/skills/kugelaudio-tts/
 ```
 
 `--global` installs to `~/.claude/skills/`, and `--dest <dir>` selects another

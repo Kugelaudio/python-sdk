@@ -44,8 +44,7 @@ def test_install_does_not_overwrite_without_force(tmp_path):
 def test_cli_list(capsys):
     assert main(["list"]) == 0
     listed = capsys.readouterr().out.split()
-    assert "kugelaudio-tts" in listed
-    assert "kugelaudio-agents" in listed
+    assert listed == ["kugelaudio-tts"]
 
 
 @pytest.mark.skipif(not PRIVATE_DIR.is_dir(), reason="the canonical skills live in packages/private")
