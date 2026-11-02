@@ -17,7 +17,7 @@ from openai import AsyncOpenAI
 
 
 def test_native_live_model_name() -> None:
-    assert KUGEL_LIVE_MODEL == "fluid-2-turbo"
+    assert KUGEL_LIVE_MODEL == "fluid-1"
 
 
 @dataclass(slots=True)

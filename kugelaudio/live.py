@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from openai.types.live import SessionConfigParam
 
 
-KUGEL_LIVE_MODEL: str = "fluid-2-turbo"
+KUGEL_LIVE_MODEL: str = "fluid-1"
 
 
 class KugelLiveExtensions(TypedDict, total=False):
