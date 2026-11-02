@@ -122,7 +122,7 @@ detector = TurnDetector.from_pretrained(execution_provider="cpu")
 ```
 
 Omitting the override always retains the bundle-calibrated provider. The
-qualified runtime uses BF16 activations only for the fixed-shape Whisper stage;
+qualified runtime uses BF16 activations only for the fixed-shape audio stage;
 the dynamic-text fusion stage stays FP32 to avoid non-finite OpenVINO outputs.
 Servers with a compatible `onnxruntime-gpu` installation may explicitly select
 `execution_provider="cuda"`. CUDA selection fails during model loading if the
@@ -141,8 +141,8 @@ explicit lower setting for smaller allocations.
 
 Temporal sessions reuse exact intermediate work without weakening rescoring.
 If neither audio, transcript, nor supplied history changed, the next duration-specific threshold
-reuses the identical probability; a transcript-only revision reruns Qwen while
-reusing Whisper embeddings; appended audio always reruns both graphs. On the
+reuses the identical probability; a transcript-only revision reruns the text graph
+while reusing the audio embeddings; appended audio always reruns both graphs. On the
 qualified 20-core target these paths measured 0.0 ms, 20.4 ms, and 39.9 ms p50,
 respectively, after a 45.3 ms first score.
 
