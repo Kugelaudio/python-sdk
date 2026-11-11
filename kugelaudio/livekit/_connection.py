@@ -556,8 +556,15 @@ class _Connection:
                     if voice_settings:
                         msg["voice_settings"] = voice_settings
 
-                await self._ws.send_str(json.dumps(msg))
                 sent_ctx = self._context_data.get(item.context_id)
+                if item.text and sent_ctx is not None and sent_ctx.stream is not None:
+                    # LiveKit's streaming TTFB runs from this mark to the first
+                    # audio frame, and the mark means "first text sent to the
+                    # provider". Idempotent until LiveKit emits the metrics.
+                    # RISK: private livekit-agents API; tests/test_livekit_ttfb.py
+                    # fails if a release changes what the mark means.
+                    sent_ctx.stream._mark_started()
+                await self._ws.send_str(json.dumps(msg))
                 if sent_ctx is not None:
                     sent_ctx.op.expect_audio()
         except Exception:
@@ -636,8 +643,6 @@ class _Connection:
             if data.get("audio"):
                 audio_bytes = base64.b64decode(data["audio"])
                 ctx.op.record_chunk(len(audio_bytes))
-                if ctx.stream is not None:
-                    ctx.stream._mark_started()
                 ctx.emitter.push(audio_bytes)
 
             if data.get("word_timestamps"):
