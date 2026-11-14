@@ -1377,10 +1377,7 @@ class TTSResource:
                             yield AudioChunk.from_dict(data)
 
                         if "word_timestamps" in data:
-                            yield [
-                                WordTimestamp.from_dict(w)
-                                for w in data["word_timestamps"]
-                            ]
+                            yield WordTimestamp.list_from_frame(data)
 
                     except ConnectionClosed as e:
                         # Connection was closed, clear pool and retry once
@@ -1430,10 +1427,7 @@ class TTSResource:
                                 yield AudioChunk.from_dict(data)
 
                             if "word_timestamps" in data:
-                                yield [
-                                    WordTimestamp.from_dict(w)
-                                    for w in data["word_timestamps"]
-                                ]
+                                yield WordTimestamp.list_from_frame(data)
 
                         except ConnectionClosed as e:
                             raise classify_ws_close(

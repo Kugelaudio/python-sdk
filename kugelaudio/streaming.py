@@ -635,9 +635,7 @@ class StreamingSession(_DiagnosedSession):
                     yield AudioChunk.from_dict(data)
 
                 if "word_timestamps" in data:
-                    stamps = [
-                        WordTimestamp.from_dict(w) for w in data["word_timestamps"]
-                    ]
+                    stamps = WordTimestamp.list_from_frame(data)
                     self._last_word_timestamps = stamps
                     if self._on_word_timestamps:
                         self._on_word_timestamps(stamps)
@@ -749,9 +747,7 @@ class StreamingSession(_DiagnosedSession):
                     yield AudioChunk.from_dict(data)
 
                 if "word_timestamps" in data:
-                    stamps = [
-                        WordTimestamp.from_dict(w) for w in data["word_timestamps"]
-                    ]
+                    stamps = WordTimestamp.list_from_frame(data)
                     self._last_word_timestamps = stamps
                     if self._on_word_timestamps:
                         self._on_word_timestamps(stamps)
@@ -1959,9 +1955,7 @@ class MultiContextSession(_DiagnosedSession):
                     yield AudioChunk.from_dict(data)
 
                 if "word_timestamps" in data:
-                    stamps = [
-                        WordTimestamp.from_dict(w) for w in data["word_timestamps"]
-                    ]
+                    stamps = WordTimestamp.list_from_frame(data)
                     self._last_word_timestamps[context_id] = stamps
                     if self._on_word_timestamps:
                         self._on_word_timestamps(context_id, stamps)

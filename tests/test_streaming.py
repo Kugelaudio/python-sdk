@@ -2237,3 +2237,107 @@ class TestUpdateSettings:
         effective = sync.update_settings(temperature=0.2)
         assert effective == {"temperature": 0.2}
         assert json.loads(ws._sent[0]) == {"update_settings": {"temperature": 0.2}}
+
+
+_FRAME_WITH_ORIGINAL = {
+    "word_timestamps": [
+        {"word": "twelve", "start_ms": 0, "end_ms": 300, "char_start": 6,
+         "char_end": 12, "original_char_start": 6, "original_char_end": 12,
+         "score": 1.0},
+        {"word": "thousand", "start_ms": 310, "end_ms": 700, "char_start": 13,
+         "char_end": 21, "original_char_start": 6, "original_char_end": 12,
+         "score": 1.0},
+    ],
+    "chunk_id": 0,
+    "text": "About twelve thousand visitors.",
+    "original_text": "About 12,000 visitors.",
+}
+
+
+class TestWordTimestampOriginalOffsets:
+    """original_char_* and the frame's text/original_text (ENG-1586)."""
+
+    def test_from_frame_parses_original_fields(self):
+        from kugelaudio.models import WordTimestamp
+
+        stamps = WordTimestamp.list_from_frame(_FRAME_WITH_ORIGINAL)
+        assert [s.original_char_start for s in stamps] == [6, 6]
+        assert [s.original_char_end for s in stamps] == [12, 12]
+        assert stamps[1].text == "About twelve thousand visitors."
+        assert stamps[1].original_text == "About 12,000 visitors."
+        assert stamps[1].original_text[
+            stamps[1].original_char_start:stamps[1].original_char_end
+        ] == "12,000"
+
+    def test_offsets_are_code_points_after_an_emoji(self):
+        from kugelaudio.models import WordTimestamp
+
+        frame = {
+            "word_timestamps": [
+                {"word": "twelve", "start_ms": 0, "end_ms": 300, "char_start": 2,
+                 "char_end": 8, "original_char_start": 2, "original_char_end": 8},
+            ],
+            "text": "\U0001F600 twelve visitors.",
+            "original_text": "\U0001F600 12,000 visitors.",
+        }
+        (stamp,) = WordTimestamp.list_from_frame(frame)
+        assert stamp.original_text[
+            stamp.original_char_start:stamp.original_char_end
+        ] == "12,000"
+        assert stamp.text[stamp.char_start:stamp.char_end] == "twelve"
+
+    def test_older_frame_leaves_new_fields_none(self):
+        from kugelaudio.models import WordTimestamp
+
+        stamps = WordTimestamp.list_from_frame(
+            {"word_timestamps": _SAMPLE_TIMESTAMPS, "chunk_id": 0}
+        )
+        assert stamps[0].original_char_start is None
+        assert stamps[0].original_char_end is None
+        assert stamps[0].text is None
+        assert stamps[0].original_text is None
+
+    @pytest.mark.asyncio
+    async def test_session_callback_receives_original_fields(self):
+        messages = [
+            _make_audio_msg(idx=0),
+            json.dumps(_FRAME_WITH_ORIGINAL),
+            json.dumps({"chunk_complete": True, "chunk_id": 0}),
+            json.dumps({"session_closed": True}),
+        ]
+        received = []
+        session = StreamingSession(
+            api_key="test",
+            tts_url="http://localhost:8000",
+            config=StreamConfig(word_timestamps=True),
+            on_word_timestamps=received.append,
+        )
+        session._ws = MockWebSocket(messages)
+        session._is_started = True
+        async for _ in session.send("About 12,000 visitors."):
+            pass
+        assert received[0][1].original_text == "About 12,000 visitors."
+        assert session.last_word_timestamps[0].original_char_end == 12
+
+    @pytest.mark.asyncio
+    async def test_multi_context_keeps_original_fields(self):
+        frame = dict(_FRAME_WITH_ORIGINAL, context_id="ctx-a")
+        messages = [
+            _make_audio_msg_with_ctx("ctx-a", idx=0),
+            json.dumps(frame),
+            json.dumps({"chunk_complete": True, "chunk_id": 0,
+                        "context_id": "ctx-a"}),
+        ]
+        session = MultiContextSession(
+            api_key="test",
+            tts_url="http://localhost:8000",
+            word_timestamps=True,
+        )
+        session._ws = MockWebSocket(messages)
+        session._is_started = True
+        session._contexts.add("ctx-a")
+        async for _ in session.send("ctx-a", "About 12,000 visitors.", flush=True):
+            pass
+        stamps = session.get_word_timestamps("ctx-a")
+        assert stamps[0].original_text == "About 12,000 visitors."
+        assert stamps[1].original_char_start == 6

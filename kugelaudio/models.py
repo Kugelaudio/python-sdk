@@ -453,6 +453,18 @@ class WordTimestamp:
     char_start: int
     char_end: int
     score: float = 1.0
+    original_char_start: Optional[int] = None
+    original_char_end: Optional[int] = None
+    text: Optional[str] = None
+    original_text: Optional[str] = None
+    """Offsets into the customer's own text, and the frame's two texts.
+
+    ``char_start``/``char_end`` index :attr:`text` (what was spoken, after
+    normalization); ``original_char_start``/``original_char_end`` index
+    :attr:`original_text` (your text). All offsets count Unicode code points,
+    which is what Python string slicing uses. The four added fields are
+    ``None`` when the server does not send them.
+    """
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WordTimestamp":
@@ -463,7 +475,22 @@ class WordTimestamp:
             char_start=data["char_start"],
             char_end=data["char_end"],
             score=data.get("score", 1.0),
+            original_char_start=data.get("original_char_start"),
+            original_char_end=data.get("original_char_end"),
         )
+
+    @classmethod
+    def list_from_frame(cls, frame: Dict[str, Any]) -> List["WordTimestamp"]:
+        """Parse a ``word_timestamps`` frame, attaching its ``text`` and ``original_text``."""
+        text = frame.get("text")
+        original_text = frame.get("original_text")
+        stamps = []
+        for raw in frame["word_timestamps"]:
+            stamp = cls.from_dict(raw)
+            stamp.text = text
+            stamp.original_text = original_text
+            stamps.append(stamp)
+        return stamps
 
     @property
     def duration_ms(self) -> int:
