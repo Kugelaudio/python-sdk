@@ -238,8 +238,9 @@ class VoicesResource:
         params: Dict[str, Any] = {"limit": limit, "offset": offset}
         if language:
             params["language"] = language
-        if include_public:
-            params["include_public"] = "true"
+        # Always sent: the server's default is true, so leaving it out for False
+        # listed the public catalog anyway (ENG-1571).
+        params["include_public"] = "true" if include_public else "false"
 
         response = self._client._request("GET", "/v1/voices", params=params)
         return VoiceListResponse.from_dict(response)

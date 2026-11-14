@@ -119,3 +119,13 @@ def test_add_reference_requires_and_sends_speaker_consent(tmp_path):
 
     with pytest.raises(TypeError, match="speaker_consent"):
         client.voices.add_reference(7, audio)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(("include_public", "sent"), [(True, "true"), (False, "false")])
+def test_list_always_sends_include_public(include_public: bool, sent: str) -> None:
+    """ENG-1571: False was omitted, so the server's default (true) listed the catalog."""
+    client = KugelAudio(api_key="test_key")
+    payload = {"voices": [], "total": 0, "limit": 20, "offset": 0}
+    with patch.object(client, "_request", return_value=payload) as m:
+        client.voices.list(include_public=include_public)
+    assert m.call_args.kwargs["params"]["include_public"] == sent
