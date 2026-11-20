@@ -1337,6 +1337,32 @@ class MultiContextSession(_DiagnosedSession):
         self._contexts.discard(context_id)
         self._context_voices.pop(context_id, None)
         self._end_turn(context_id)
+        self._pending_messages = [
+            msg for msg in self._pending_messages if msg.get("context_id") != context_id
+        ]
+
+    def _pop_pending_message(
+        self, context_id: str, *, only_create_ack: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Pop the oldest stashed message belonging to *context_id* (FIFO)."""
+        for idx, msg in enumerate(self._pending_messages):
+            if msg.get("context_id") != context_id:
+                continue
+            if only_create_ack and not (
+                msg.get("context_created") or msg.get("error")
+            ):
+                continue
+            return self._pending_messages.pop(idx)
+        return None
+
+    def _stash_other_context_frame(self, data: Dict[str, Any]) -> None:
+        """Record side effects and buffer a frame belonging to another context."""
+        msg_ctx = data.get("context_id")
+        if not data.get("error"):
+            self._note_turn_event(msg_ctx, data)
+            if data.get("context_closed"):
+                self._capture_context_usage(data)
+        self._pending_messages.append(data)
 
     def _note_turn_event(self, context_id: Optional[str], data: Dict[str, Any]) -> None:
         """Track turn boundaries from a server frame, for any context."""
@@ -1380,9 +1406,38 @@ class MultiContextSession(_DiagnosedSession):
         ):
             self._reset_dead_session()
             raise err from cause
-        contexts = list(self._context_voices.items())
+        # Preserve completed, undelivered turns buffered for other contexts so
+        # a restart recovery on *context_id* does not drop audio whose replay
+        # state was already cleared by ``_note_turn_event``. Contexts that
+        # already received ``context_closed`` on the old socket are not
+        # recreated on the new socket, and old-socket ``context_closed``
+        # acknowledgements are not restored into ``_pending_messages`` (their
+        # usage was already captured in ``_context_usage`` on stash) so they
+        # cannot prematurely satisfy a close on the new socket.
+        closed_on_old_socket: Set[str] = set()
+        last_completed_idx: Dict[str, int] = {}
+        for idx, msg in enumerate(self._pending_messages):
+            msg_ctx = msg.get("context_id")
+            if msg_ctx is None:
+                continue
+            if msg.get("context_closed"):
+                closed_on_old_socket.add(msg_ctx)
+            if msg.get("final") or msg.get("context_closed"):
+                last_completed_idx[msg_ctx] = idx
+        contexts = [
+            (cid, voice_id)
+            for cid, voice_id in self._context_voices.items()
+            if cid not in closed_on_old_socket
+        ]
         frames = self._turn_frames
         spoken = self._turn_audio
+        preserved_pending = [
+            msg
+            for idx, msg in enumerate(self._pending_messages)
+            if (msg_ctx := msg.get("context_id")) in last_completed_idx
+            and idx <= last_completed_idx[msg_ctx]
+            and not msg.get("context_closed")
+        ]
         self._reset_dead_session()
         self._recovering = True
         # The reconnect is a retry of the turn that hit the close; a failed
@@ -1407,6 +1462,8 @@ class MultiContextSession(_DiagnosedSession):
             # every setup before replay can produce audio on the shared socket.
             for cid, voice_id in contexts:
                 await self.create_context(cid, voice_id)
+            if preserved_pending:
+                self._pending_messages = preserved_pending + self._pending_messages
             replayed = False
             for cid, _voice_id in contexts:
                 if cid in spoken:
@@ -1600,6 +1657,12 @@ class MultiContextSession(_DiagnosedSession):
         if not self._ws:
             await self.connect()
 
+        # Discard any undrained frames from a prior closed lifecycle of this ID
+        # before creating a fresh server context with the same context_id.
+        self._pending_messages = [
+            m for m in self._pending_messages if m.get("context_id") != context_id
+        ]
+
         self._context_voices.setdefault(context_id, voice_id)
 
         from kugelaudio.client import _warn_if_no_language
@@ -1677,6 +1740,12 @@ class MultiContextSession(_DiagnosedSession):
         if context_id in self._contexts:
             return  # Already exists
 
+        # Discard any undrained frames from a prior closed lifecycle of this ID
+        # before creating a fresh server context with the same context_id.
+        self._pending_messages = [
+            m for m in self._pending_messages if m.get("context_id") != context_id
+        ]
+
         self._context_voices.setdefault(context_id, voice_id)
 
         # Send context initialization — voice_id must be in voice_settings
@@ -1694,17 +1763,30 @@ class MultiContextSession(_DiagnosedSession):
         if await self._ws_send(msg):
             return  # the restart recovery re-created every context
 
-        # Wait for confirmation
+        # Wait for confirmation, preserving frames belonging to other contexts.
         while True:
-            response = await self._ws.recv()
-            data = json.loads(response)
+            pending = self._pop_pending_message(context_id, only_create_ack=True)
+            if pending is not None:
+                data = pending
+            else:
+                response = await asyncio.wait_for(
+                    self._ws.recv(), timeout=_DEFAULT_RECV_TIMEOUT_S
+                )
+                data = json.loads(response)
 
+            msg_ctx = data.get("context_id")
             if data.get("error"):
+                if msg_ctx is not None and msg_ctx != context_id:
+                    self._stash_other_context_frame(data)
+                    continue
                 self._raise_frame_error(data, context_id)
 
-            if data.get("context_created") and data.get("context_id") == context_id:
+            if data.get("context_created") and msg_ctx == context_id:
                 self._contexts.add(context_id)
                 break
+
+            if msg_ctx != context_id:
+                self._stash_other_context_frame(data)
 
     async def update_settings(
         self,
@@ -1876,13 +1958,12 @@ class MultiContextSession(_DiagnosedSession):
         await self._ws_send(frame, replayable=True)
         op.expect_audio()
 
-        # Collect audio for this context. The server marks each text chunk's
-        # audio delivery with `chunk_complete`; the sole terminal signal is
-        # `context_closed`, which only arrives once `close_context` is called.
+        # Yield any queued audio before reading the reply to this write.
         async for chunk in self._receive_audio(
             context_id,
             wait_for_chunk_complete=flush,
             chunk_complete_idle_timeout=chunk_complete_idle_timeout,
+            after_write=True,
         ):
             yield chunk
 
@@ -1920,6 +2001,7 @@ class MultiContextSession(_DiagnosedSession):
         async for chunk in self._receive_audio(
             context_id,
             wait_for_chunk_complete=True,
+            after_write=True,
         ):
             yield chunk
 
@@ -1941,6 +2023,26 @@ class MultiContextSession(_DiagnosedSession):
             AudioChunk for any remaining buffered text
         """
         if not self._is_started or context_id not in self._contexts:
+            # Context was already closed on a prior socket before recovery:
+            # drain any preserved buffered audio (unless immediate barge-in)
+            # without sending a close_context frame for a non-existent context.
+            try:
+                if not immediate:
+                    while True:
+                        pending = self._pop_pending_message(context_id)
+                        if pending is None:
+                            break
+                        if pending.get("error"):
+                            self._raise_frame_error(pending, context_id)
+                        if pending.get("audio"):
+                            yield AudioChunk.from_dict(pending)
+                        if "word_timestamps" in pending:
+                            stamps = WordTimestamp.list_from_frame(pending)
+                            self._last_word_timestamps[context_id] = stamps
+                            if self._on_word_timestamps:
+                                self._on_word_timestamps(context_id, stamps)
+            finally:
+                self._forget_context(context_id)
             return
 
         if immediate:
@@ -1968,7 +2070,11 @@ class MultiContextSession(_DiagnosedSession):
         if await self._ws_send(msg):
             await self._ws_send(msg)
 
-        async for chunk in self._receive_audio(context_id, wait_for_close=True):
+        async for chunk in self._receive_audio(
+            context_id,
+            wait_for_close=True,
+            drop_buffered_audio=immediate,
+        ):
             yield chunk
 
         self._forget_context(context_id)
@@ -1995,6 +2101,8 @@ class MultiContextSession(_DiagnosedSession):
         wait_for_close: bool = False,
         wait_for_chunk_complete: bool = False,
         chunk_complete_idle_timeout: Optional[float] = None,
+        drop_buffered_audio: bool = False,
+        after_write: bool = False,
     ) -> AsyncIterator[AudioChunk]:
         """Receive audio messages for a specific context.
 
@@ -2009,6 +2117,9 @@ class MultiContextSession(_DiagnosedSession):
         ``chunk_complete`` frames (one per server-side sentence). We wait
         ``_INTER_CHUNK_IDLE_S`` after each ``chunk_complete`` before
         returning, so the caller receives every chunk.
+
+        After a send or flush, deliver audio buffered from earlier writes
+        without changing the deadline or completion state for the new reply.
         """
         received_any_audio = False
         last_chunk_complete = False
@@ -2032,29 +2143,45 @@ class MultiContextSession(_DiagnosedSession):
                 )
 
             try:
-                msg = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
-                data = json.loads(msg)
+                pending = self._pop_pending_message(context_id)
+                from_pending = pending is not None
+                if pending is not None:
+                    data = pending
+                    if data.get("error"):
+                        self._raise_frame_error(data, context_id)
+                else:
+                    msg = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+                    data = json.loads(msg)
 
-                if data.get("error"):
-                    self._raise_frame_error(data, context_id)
+                    msg_ctx = data.get("context_id")
+                    if data.get("error"):
+                        if msg_ctx is not None and msg_ctx != context_id:
+                            self._stash_other_context_frame(data)
+                            continue
+                        self._raise_frame_error(data, context_id)
 
-                msg_ctx = data.get("context_id")
-                self._note_turn_event(msg_ctx, data)
+                    # Skip messages for other contexts — stash for that context's reader
+                    if msg_ctx != context_id:
+                        self._stash_other_context_frame(data)
+                        continue
 
-                # Skip messages for other contexts — stash if needed later
-                if msg_ctx != context_id:
-                    self._pending_messages.append(data)
-                    continue
+                    self._note_turn_event(msg_ctx, data)
 
+                buffered_before_write = from_pending and after_write
                 if data.get("generation_started"):
-                    received_any_audio = False
-                    last_chunk_complete = False
+                    if not buffered_before_write:
+                        received_any_audio = False
+                        last_chunk_complete = False
                     continue
 
-                # Only yield audio for matching context
+                # Only yield audio for matching context (skip pre-buffered audio
+                # on immediate barge-in close while keeping terminal/usage handling).
                 if data.get("audio"):
-                    received_any_audio = True
-                    last_chunk_complete = False
+                    if from_pending and drop_buffered_audio:
+                        continue
+                    if not buffered_before_write:
+                        received_any_audio = True
+                        last_chunk_complete = False
                     yield AudioChunk.from_dict(data)
 
                 if "word_timestamps" in data:
@@ -2066,6 +2193,8 @@ class MultiContextSession(_DiagnosedSession):
 
                 # chunk_complete = one text-chunk done (there may be more)
                 if data.get("chunk_complete"):
+                    if buffered_before_write:
+                        continue
                     if not wait_for_close and idle_after_chunk_complete <= 0:
                         break
                     last_chunk_complete = True
@@ -2078,7 +2207,7 @@ class MultiContextSession(_DiagnosedSession):
                 # inter-chunk idle heuristic. On a close drain the terminal
                 # signal stays ``context_closed`` (final precedes it).
                 if data.get("final"):
-                    if not wait_for_close:
+                    if not wait_for_close and not buffered_before_write:
                         break
                     continue
 

@@ -1301,6 +1301,330 @@ class TestMultiContextReceiveAudio:
         assert session._pending_messages[0]["context_id"] == "ctx2"
 
     @pytest.mark.asyncio
+    async def test_drains_interleaved_frames_for_second_context(self):
+        """Frames stashed for ctx2 while reading ctx1 must be delivered when
+        ctx2 is read, rather than being dropped and timing out."""
+        ws = MockWebSocket(
+            [
+                _make_audio_msg_with_ctx("ctx1", idx=0),
+                _make_audio_msg_with_ctx("ctx2", idx=0),
+                _make_audio_msg_with_ctx("ctx2", idx=1),
+                json.dumps({"final": True, "context_id": "ctx2"}),
+                _make_audio_msg_with_ctx("ctx1", idx=1),
+                json.dumps({"final": True, "context_id": "ctx1"}),
+            ]
+        )
+
+        session = MultiContextSession(
+            api_key="test",
+            tts_url="http://localhost:8000",
+        )
+        session._ws = ws
+        session._is_started = True
+        session._contexts = {"ctx1", "ctx2"}
+
+        ctx1_chunks = [c async for c in session.send("ctx1", "one", flush=True)]
+        assert [c.index for c in ctx1_chunks] == [0, 1]
+
+        # All of ctx2's frames already arrived while reading ctx1; reading ctx2
+        # must replay them from _pending_messages without dropping them.
+        ctx2_chunks = [c async for c in session._receive_audio("ctx2", wait_for_chunk_complete=True)]
+        assert [c.index for c in ctx2_chunks] == [0, 1]
+        assert session._pending_messages == []
+
+    @pytest.mark.asyncio
+    async def test_create_context_stashes_interleaved_frames_for_other_contexts(self):
+        """Interleaved audio arriving while create_context waits for its ack
+        must be preserved for the owning context instead of dropped."""
+        ws = MockWebSocket(
+            [
+                _make_audio_msg_with_ctx("ctx1", idx=0),
+                json.dumps({"final": True, "context_id": "ctx1"}),
+                json.dumps({"context_created": True, "context_id": "ctx2"}),
+            ]
+        )
+
+        session = MultiContextSession(
+            api_key="test",
+            tts_url="http://localhost:8000",
+        )
+        session._ws = ws
+        session._is_started = True
+        session._contexts = {"ctx1"}
+
+        await session.create_context("ctx2", voice_id=42)
+        assert "ctx2" in session._contexts
+
+        ctx1_chunks = [c async for c in session._receive_audio("ctx1", wait_for_chunk_complete=True)]
+        assert [c.index for c in ctx1_chunks] == [0]
+
+    @pytest.mark.asyncio
+    async def test_stashed_context_closed_captures_usage_and_terminates_close_context(self):
+        """If ctx2's context_closed arrives while reading ctx1, usage_for('ctx2')
+        is captured and close_context('ctx2') consumes the stashed frame."""
+        ws = MockWebSocket(
+            [
+                _make_audio_msg_with_ctx("ctx1", idx=0),
+                json.dumps(
+                    {
+                        "context_closed": True,
+                        "context_id": "ctx2",
+                        "usage": {"audio_seconds": 1.5, "cost_cents": 0.12, "currency": "eur"},
+                    }
+                ),
+                json.dumps({"final": True, "context_id": "ctx1"}),
+            ]
+        )
+
+        session = MultiContextSession(
+            api_key="test",
+            tts_url="http://localhost:8000",
+        )
+        session._ws = ws
+        session._is_started = True
+        session._contexts = {"ctx1", "ctx2"}
+
+        ctx1_chunks = [c async for c in session.send("ctx1", "one", flush=True)]
+        assert len(ctx1_chunks) == 1
+        assert session.usage_for("ctx2") is not None
+        assert session.usage_for("ctx2").audio_seconds == 1.5
+
+        ctx2_chunks = [c async for c in session.close_context("ctx2")]
+        assert ctx2_chunks == []
+        assert "ctx2" not in session._contexts
+
+    @pytest.mark.asyncio
+    async def test_other_context_error_is_routed_to_its_own_context(self):
+        """A per-context error frame for ctx2 arriving while reading ctx1 must
+        not fail ctx1 and must raise when ctx2 is read."""
+        ws = MockWebSocket(
+            [
+                _make_audio_msg_with_ctx("ctx1", idx=0),
+                json.dumps(
+                    {
+                        "error": "Too many concurrent contexts",
+                        "error_code": "TOO_MANY_CONTEXTS",
+                        "code": 429,
+                        "context_id": "ctx2",
+                    }
+                ),
+                json.dumps({"final": True, "context_id": "ctx1"}),
+            ]
+        )
+
+        session = MultiContextSession(
+            api_key="test",
+            tts_url="http://localhost:8000",
+        )
+        session._ws = ws
+        session._is_started = True
+        session._contexts = {"ctx1", "ctx2"}
+
+        ctx1_chunks = [c async for c in session.send("ctx1", "one", flush=True)]
+        assert len(ctx1_chunks) == 1
+
+        with pytest.raises(RateLimitError) as exc_info:
+            async for _ in session._receive_audio("ctx2", wait_for_chunk_complete=True):
+                pass
+        assert exc_info.value.error_code == "TOO_MANY_CONTEXTS"
+
+    @pytest.mark.asyncio
+    async def test_immediate_close_skips_buffered_audio_but_preserves_terminal_usage(self):
+        """When reading ctx1 buffers audio for ctx2, an immediate (barge-in)
+        close_context('ctx2', immediate=True) must drop the buffered audio
+        while still waiting for context_closed and capturing usage."""
+        ws = MockWebSocket(
+            [
+                _make_audio_msg_with_ctx("ctx1", idx=0),
+                _make_audio_msg_with_ctx("ctx2", idx=0),
+                _make_audio_msg_with_ctx("ctx2", idx=1),
+                json.dumps({"final": True, "context_id": "ctx1"}),
+                json.dumps(
+                    {
+                        "context_closed": True,
+                        "context_id": "ctx2",
+                        "usage": {"audio_seconds": 0.4, "cost_cents": 0.04, "currency": "eur"},
+                    }
+                ),
+            ]
+        )
+
+        session = MultiContextSession(
+            api_key="test",
+            tts_url="http://localhost:8000",
+        )
+        session._ws = ws
+        session._is_started = True
+        session._contexts = {"ctx1", "ctx2"}
+
+        ctx1_chunks = [c async for c in session.send("ctx1", "one", flush=True)]
+        assert len(ctx1_chunks) == 1
+        assert len(session._pending_messages) == 2
+
+        ctx2_chunks = [c async for c in session.close_context("ctx2", immediate=True)]
+        assert ctx2_chunks == []
+        assert "ctx2" not in session._contexts
+        assert session.usage_for("ctx2") is not None
+        assert session.usage_for("ctx2").audio_seconds == 0.4
+        assert session._pending_messages == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("use_flush", [False, True])
+    async def test_restart_recovery_drains_buffered_audio_and_waits_for_new_reply(
+        self, monkeypatch, use_flush
+    ):
+        """After a restart, public writes yield buffered audio and their own reply."""
+        old_ws = _WSScripted(
+            [
+                _make_audio_msg_with_ctx("ctx2", idx=0),
+                _make_audio_msg_with_ctx("ctx2", idx=1),
+                json.dumps({"chunk_complete": True, "context_id": "ctx2"}),
+                json.dumps({"final": True, "context_id": "ctx2"}),
+                _FakeConnectionClosed(1012, "server restarting"),
+            ]
+        )
+        new_ws = MockWebSocket(
+            [
+                _ctx_created("ctx1"),
+                _ctx_created("ctx2"),
+                _make_audio_msg_with_ctx("ctx1", idx=0),
+                json.dumps({"final": True, "context_id": "ctx1"}),
+                _make_audio_msg_with_ctx("ctx2", idx=2),
+                json.dumps({"final": True, "context_id": "ctx2"}),
+            ]
+        )
+
+        session = MultiContextSession(api_key="test", tts_url="http://localhost:8000")
+        session._ws = old_ws
+        session._is_started = True
+        session._contexts = {"ctx1", "ctx2"}
+        session._context_voices = {"ctx1": 7, "ctx2": 8}
+        session._turn_frames = {"ctx2": [{"text": "two", "context_id": "ctx2", "flush": True}]}
+        _patch_reconnect(monkeypatch, session, new_ws, mark_started=False)
+
+        ctx1_chunks = [c async for c in session.send("ctx1", "one", flush=True)]
+        assert [c.index for c in ctx1_chunks] == [0]
+
+        reply = (
+            session.flush("ctx2")
+            if use_flush
+            else session.send(
+                "ctx2", "next turn", flush=True, chunk_complete_idle_timeout=0
+            )
+        )
+        assert [c.index async for c in reply] == [0, 1, 2]
+        assert session._pending_messages == []
+
+    @pytest.mark.asyncio
+    async def test_buffered_audio_does_not_shorten_new_send_first_response_timeout(self):
+        ws = MockWebSocket(
+            [
+                (0, _make_audio_msg_with_ctx("ctx2", idx=0)),
+                (0, json.dumps({"final": True, "context_id": "ctx2"})),
+                (0, json.dumps({"final": True, "context_id": "ctx1"})),
+                (_POLL_TIMEOUT_S * 2, _make_audio_msg_with_ctx("ctx2", idx=1)),
+                (0, json.dumps({"final": True, "context_id": "ctx2"})),
+            ]
+        )
+        session = MultiContextSession(api_key="test", tts_url="http://localhost:8000")
+        session._ws = ws
+        session._is_started = True
+        session._contexts = {"ctx1", "ctx2"}
+
+        assert [c async for c in session.send("ctx1", "one", flush=True)] == []
+        chunks = [
+            c.index async for c in session.send("ctx2", "next", flush=False)
+        ]
+        assert chunks == [0, 1]
+
+    @pytest.mark.asyncio
+    async def test_restart_recovery_with_buffered_context_closed_allows_clean_close_and_reuse(
+        self, monkeypatch
+    ):
+        """If reading ctx1 stashes audio + context_closed for ctx2 and ctx1
+        then triggers restart recovery (1012), ctx2 must not be recreated on
+        the new socket and its old context_closed ack must not satisfy a later
+        close when ID 'ctx2' is reused on the new socket."""
+        old_ws = _WSScripted(
+            [
+                _make_audio_msg_with_ctx("ctx2", idx=0),
+                _make_audio_msg_with_ctx("ctx2", idx=1),
+                json.dumps(
+                    {
+                        "context_closed": True,
+                        "context_id": "ctx2",
+                        "usage": {
+                            "audio_seconds": 1.5,
+                            "cost_cents": 0.12,
+                            "currency": "eur",
+                        },
+                    }
+                ),
+                _FakeConnectionClosed(1012, "server restarting"),
+            ]
+        )
+        new_ws = MockWebSocket(
+            [
+                # Only ctx1 is recreated during recovery (ctx2 already closed).
+                _ctx_created("ctx1"),
+                _make_audio_msg_with_ctx("ctx1", idx=0),
+                json.dumps({"final": True, "context_id": "ctx1"}),
+                # Subsequent reuse of ID 'ctx2' on the new socket.
+                _ctx_created("ctx2"),
+                _make_audio_msg_with_ctx("ctx2", idx=0),
+                json.dumps({"final": True, "context_id": "ctx2"}),
+                json.dumps(
+                    {
+                        "context_closed": True,
+                        "context_id": "ctx2",
+                        "usage": {
+                            "audio_seconds": 0.8,
+                            "cost_cents": 0.06,
+                            "currency": "eur",
+                        },
+                    }
+                ),
+            ]
+        )
+
+        session = MultiContextSession(api_key="test", tts_url="http://localhost:8000")
+        session._ws = old_ws
+        session._is_started = True
+        session._contexts = {"ctx1", "ctx2"}
+        session._context_voices = {"ctx1": 7, "ctx2": 8}
+        _patch_reconnect(monkeypatch, session, new_ws, mark_started=False)
+
+        ctx1_chunks = [c async for c in session.send("ctx1", "one", flush=True)]
+        assert [c.index for c in ctx1_chunks] == [0]
+        # ctx2 was already closed on old_ws: not recreated, old usage preserved,
+        # and no old context_closed frame restored into _pending_messages.
+        assert session.active_contexts == {"ctx1"}
+        assert session.usage_for("ctx2") is not None
+        assert session.usage_for("ctx2").audio_seconds == 1.5
+        assert all(not m.get("context_closed") for m in session._pending_messages)
+
+        # close_context('ctx2') drains preserved audio without sending close on new_ws.
+        sent_before_close = len(new_ws._sent)
+        drained = [c async for c in session.close_context("ctx2")]
+        assert [c.index for c in drained] == [0, 1]
+        assert len(new_ws._sent) == sent_before_close
+        assert session.usage_for("ctx2").audio_seconds == 1.5
+        assert session._pending_messages == []
+
+        # Reusing ID 'ctx2' creates a fresh context on new_ws and waits for its
+        # real context_closed acknowledgement on close_context('ctx2').
+        await session.create_context("ctx2", voice_id=8)
+        assert "ctx2" in session.active_contexts
+        reused_chunks = [c async for c in session.send("ctx2", "again", flush=True)]
+        assert [c.index for c in reused_chunks] == [0]
+
+        close_chunks = [c async for c in session.close_context("ctx2")]
+        assert close_chunks == []
+        assert "ctx2" not in session.active_contexts
+        assert session.usage_for("ctx2").audio_seconds == 0.8
+        assert new_ws._messages == []
+
+    @pytest.mark.asyncio
     async def test_flush_waits_for_chunk_complete_despite_audio_gap(self):
         """flush=True waits past short inter-audio gaps until chunk_complete."""
         ws = MockWebSocket(
