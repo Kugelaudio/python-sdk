@@ -25,11 +25,12 @@ from typing import (
     Any,
     Optional,
 )
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urljoin
 
 import httpx
 
 from kugelaudio._sdk_metadata import sdk_query_string
+from kugelaudio._ws_auth import async_ws_auth_kwargs, bearer_headers
 from kugelaudio.audio import Audio, AudioStream
 from kugelaudio.exceptions import (
     ConnectionError as KugelAudioConnectionError,
@@ -299,14 +300,19 @@ _IDLE_FRAME_CODE = 408
 
 
 def _run_stream_sync(
-    url: str, config: dict, audio: Iterable[bytes], timeout: float
+    url: str, api_key: str, config: dict, audio: Iterable[bytes], timeout: float
 ) -> Iterator[bytes]:
     import websockets
     from websockets.exceptions import ConnectionClosed
     from websockets.sync.client import connect
 
     try:
-        ws = connect(url, compression=None, open_timeout=timeout)
+        ws = connect(
+            url,
+            compression=None,
+            open_timeout=timeout,
+            additional_headers=bearer_headers(api_key),
+        )
     except ws_handshake_error_types(websockets) as e:
         raise _handshake_error(e) from e
     stop = threading.Event()
@@ -373,16 +379,17 @@ async def _pump_async(ws: Any, audio: Any, max_bytes: int) -> None:
         return  # the receive side reports why the server closed
 
 
-async def _connect_async(url: str) -> Any:
+async def _connect_async(url: str, api_key: str) -> Any:
     import websockets
     from websockets.exceptions import InvalidURI
 
     try:
-        return await websockets.connect(url, compression=None)
+        return await websockets.connect(
+            url, compression=None, **async_ws_auth_kwargs(url, api_key)
+        )
     except ws_handshake_error_types(websockets) as e:
         raise _handshake_error(e) from e
     except InvalidURI:
-        # Its text holds the URL, whose query carries the API key.
         raise ValidationError(
             "The KugelAudio API URL does not form a valid WebSocket URL."
         ) from None
@@ -455,9 +462,9 @@ async def _exchange_async(ws: Any, config: dict, audio: Any) -> AsyncIterator[by
 
 
 async def _run_stream_async(
-    url: str, config: dict, audio: Any, timeout: float
+    url: str, api_key: str, config: dict, audio: Any, timeout: float
 ) -> AsyncIterator[bytes]:
-    ws = await _connect_async(url)
+    ws = await _connect_async(url, api_key)
     try:
         await _begin_async(ws, config, timeout, reused=False)
         async with aclosing(_exchange_async(ws, config, audio)) as chunks:
@@ -559,7 +566,7 @@ class EnhanceSession:
             if ws is None:
                 url = self._resource._stream_url(session=False)
                 async with aclosing(
-                    _run_stream_async(url, config, audio, timeout)
+                    _run_stream_async(url, self._resource._client._api_key, config, audio, timeout)
                 ) as chunks:
                     async for chunk in chunks:
                         yield chunk
@@ -639,7 +646,9 @@ class EnhanceSession:
     async def _connect(self, url: str) -> Any:
         """Open a socket that :meth:`aclose` can stop while it connects; raises
         the session-closed error when the session closed meanwhile."""
-        connecting = asyncio.ensure_future(_connect_async(url))
+        connecting = asyncio.ensure_future(
+            _connect_async(url, self._resource._client._api_key)
+        )
         self._connecting = connecting
         try:
             await asyncio.wait({connecting})
@@ -709,10 +718,8 @@ class EnhanceResource:
         base = self._client._api_url.replace("https://", "wss://").replace(
             "http://", "ws://"
         )
-        params = {"api_key": self._client._api_key}
-        if session:
-            params["session"] = "1"
-        return f"{base}{_ENHANCE_STREAM_PATH}?{urlencode(params)}&{sdk_query_string()}"
+        session_query = "session=1&" if session else ""
+        return f"{base}{_ENHANCE_STREAM_PATH}?{session_query}{sdk_query_string()}"
 
     async def generate(
         self,
@@ -852,7 +859,9 @@ class EnhanceResource:
         rate = _stream_rate(audio, sample_rate, allow_async=True)
         config = _stream_config(model, rate, speaker)
         url = self._stream_url(session=False)
-        return _run_stream_async(url, config, audio, self._client._timeout)
+        return _run_stream_async(
+            url, self._client._api_key, config, audio, self._client._timeout
+        )
 
     def session(self) -> EnhanceSession:
         """A session: one warm WebSocket for many :meth:`stream`-style calls.
@@ -895,7 +904,9 @@ class EnhanceResource:
         rate = _stream_rate(audio, sample_rate, allow_async=False)
         config = _stream_config(model, rate, speaker)
         url = self._stream_url(session=False)
-        return _run_stream_sync(url, config, audio, self._client._timeout)
+        return _run_stream_sync(
+            url, self._client._api_key, config, audio, self._client._timeout
+        )
 
 
 __all__ = ["EnhanceResource", "EnhanceSession", "EnhancedAudio"]

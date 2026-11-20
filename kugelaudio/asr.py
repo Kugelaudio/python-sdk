@@ -14,10 +14,10 @@ import threading
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
 
 from kugelaudio._sdk_metadata import sdk_query_string
 from kugelaudio.audio import AudioStream
+from kugelaudio._ws_auth import bearer_headers
 from kugelaudio.enhance import _closed_error, _connect_async, _handshake_error
 from kugelaudio.exceptions import (
     ConnectionError as KugelAudioConnectionError,
@@ -172,17 +172,18 @@ class _FrameReader:
         return None
 
 
-def _connect_sync(url: str, timeout: float) -> Any:
+def _connect_sync(url: str, api_key: str, timeout: float) -> Any:
     import websockets
     from websockets.exceptions import InvalidURI
     from websockets.sync.client import connect
 
     try:
-        return connect(url, compression=None, open_timeout=timeout)
+        return connect(
+            url, compression=None, open_timeout=timeout, additional_headers=bearer_headers(api_key)
+        )
     except ws_handshake_error_types(websockets) as e:
         raise _handshake_error(e) from e
     except InvalidURI:
-        # Its text holds the URL, whose query carries the API key.
         raise ValidationError(
             "The KugelAudio API URL does not form a valid WebSocket URL."
         ) from None
@@ -190,6 +191,7 @@ def _connect_sync(url: str, timeout: float) -> Any:
 
 def _run_stream_sync(
     url: str,
+    api_key: str,
     config: dict[str, object],
     max_bytes: int,
     audio: Iterable[bytes],
@@ -197,7 +199,7 @@ def _run_stream_sync(
 ) -> Iterator[StreamingTranscriptionEvent]:
     from websockets.exceptions import ConnectionClosed
 
-    ws = _connect_sync(url, timeout)
+    ws = _connect_sync(url, api_key, timeout)
     stop = threading.Event()
     failures: list[BaseException] = []
 
@@ -262,11 +264,11 @@ async def _pump_async(ws: Any, audio: Any, max_bytes: int) -> None:
 
 
 async def _run_stream_async(
-    url: str, config: dict[str, object], max_bytes: int, audio: Any
+    url: str, api_key: str, config: dict[str, object], max_bytes: int, audio: Any
 ) -> AsyncIterator[StreamingTranscriptionEvent]:
     from websockets.exceptions import ConnectionClosed
 
-    ws = await _connect_async(url)
+    ws = await _connect_async(url, api_key)
     sender: asyncio.Task[None] | None = None
     receiver: asyncio.Future[Any] | None = None
     reader = _FrameReader()
@@ -323,8 +325,7 @@ class ASRResource:
         base = self._client._api_url.replace("https://", "wss://").replace(
             "http://", "ws://"
         )
-        query = urlencode({"api_key": self._client._api_key})
-        return f"{base}{_STREAM_PATH}?{query}&{sdk_query_string()}"
+        return f"{base}{_STREAM_PATH}?{sdk_query_string()}"
 
     def transcribe(
         self,
@@ -450,7 +451,11 @@ class ASRResource:
             dictionary_ids,
         )
         return _run_stream_async(
-            self._stream_url(), options.config_frame(rate), _max_bytes(rate), audio
+            self._stream_url(),
+            self._client._api_key,
+            options.config_frame(rate),
+            _max_bytes(rate),
+            audio,
         )
 
     def stream_sync(
@@ -490,6 +495,7 @@ class ASRResource:
         )
         return _run_stream_sync(
             self._stream_url(),
+            self._client._api_key,
             options.config_frame(rate),
             _max_bytes(rate),
             audio,

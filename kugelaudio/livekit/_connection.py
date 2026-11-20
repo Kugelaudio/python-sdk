@@ -43,6 +43,7 @@ from kugelaudio._diagnostics import (
     Operation,
 )
 from kugelaudio._sdk_metadata import sdk_query_string
+from kugelaudio._ws_auth import bearer_headers
 from kugelaudio.exceptions import (
     ConnectionError as KugelAudioConnectionError,
     KugelAudioError,
@@ -431,10 +432,11 @@ class _Connection:
         ws_url = self._opts.base_url.replace("https://", "wss://").replace(
             "http://", "ws://"
         )
-        ws_url = _append_sdk_query(f"{ws_url}/ws/tts/multi?api_key={self._opts.api_key}")
+        ws_url = _append_sdk_query(f"{ws_url}/ws/tts/multi")
         try:
             self._ws = await self._session.ws_connect(
                 ws_url,
+                headers=bearer_headers(self._opts.api_key),
                 timeout=aiohttp.ClientTimeout(total=None, sock_connect=timeout),
             )
         except asyncio.TimeoutError:

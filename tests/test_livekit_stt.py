@@ -101,7 +101,11 @@ def _install(monkeypatch: pytest.MonkeyPatch, script: Script) -> _Wire:
     wire = _Wire()
 
     async def fake_run_stream_async(
-        url: str, config: dict[str, object], max_bytes: int, audio: AsyncIterator[bytes]
+        url: str,
+        api_key: str,
+        config: dict[str, object],
+        max_bytes: int,
+        audio: AsyncIterator[bytes],
     ) -> AsyncIterator[StreamingTranscriptionEvent]:
         wire.config = config
         wire.calls += 1

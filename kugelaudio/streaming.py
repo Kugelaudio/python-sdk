@@ -48,6 +48,7 @@ from kugelaudio._diagnostics import (
     Operation,
 )
 from kugelaudio._sdk_metadata import sdk_query_string
+from kugelaudio._ws_auth import async_ws_auth_kwargs
 
 # Server-initiated WS close codes that indicate an error the caller must see.
 # Other codes (e.g. 1000/1001 normal close) end the stream cleanly.
@@ -506,7 +507,7 @@ class StreamingSession(_DiagnosedSession):
             )
 
         ws_url = self._tts_url.replace("https://", "wss://").replace("http://", "ws://")
-        ws_url = _append_sdk_query(f"{ws_url}/ws/tts/stream?api_key={self._api_key}")
+        ws_url = _append_sdk_query(f"{ws_url}/ws/tts/stream")
 
         handshake_errors = ws_handshake_error_types(websockets)
         try:
@@ -516,6 +517,7 @@ class StreamingSession(_DiagnosedSession):
             self._ws = await websockets.connect(
                 ws_url,
                 compression=None,
+                **async_ws_auth_kwargs(ws_url, self._api_key),
                 ping_interval=15.0,
                 ping_timeout=15.0,
                 close_timeout=5.0,
@@ -1554,7 +1556,7 @@ class MultiContextSession(_DiagnosedSession):
             )
 
         ws_url = self._tts_url.replace("https://", "wss://").replace("http://", "ws://")
-        ws_url = _append_sdk_query(f"{ws_url}/ws/tts/multi?api_key={self._api_key}")
+        ws_url = _append_sdk_query(f"{ws_url}/ws/tts/multi")
 
         handshake_errors = ws_handshake_error_types(websockets)
         try:
@@ -1565,7 +1567,11 @@ class MultiContextSession(_DiagnosedSession):
             # can drop the connection without a close handshake, and the next
             # send() raises ConnectionClosedError("no close frame received").
             self._ws = await websockets.connect(
-                ws_url, ping_interval=15.0, ping_timeout=15.0, close_timeout=5.0
+                ws_url,
+                **async_ws_auth_kwargs(ws_url, self._api_key),
+                ping_interval=15.0,
+                ping_timeout=15.0,
+                close_timeout=5.0,
             )
         except handshake_errors as e:
             typed = classify_ws_handshake_error(e)

@@ -101,6 +101,7 @@ class _Server:
         self.after_end: list[dict] = [FINAL]
         self.close_code = 1000
         self.path: str | None = None
+        self.authorization: str | None = None
         self.config: dict | None = None
         self.messages: list[dict] = []
         self.disconnected = threading.Event()
@@ -133,6 +134,7 @@ class _Server:
 
     def _serve(self, ws: Any) -> None:
         self.path = ws.request.path
+        self.authorization = ws.request.headers.get("Authorization")
         self.config = json.loads(ws.recv())
         script = self.on_audio
         for raw in ws:
@@ -232,9 +234,9 @@ def test_config_carries_only_sample_rate_when_nothing_is_set(ws_env, mode):
     _collect(client, mode, [b"\x00\x00"], sample_rate=16000)
     assert server.config == {"type": "config", "sample_rate": 16000}
     assert server.path is not None
-    assert server.path.startswith(
-        "/v1/audio/transcriptions/stream?api_key=sk-test&sdk="
-    )
+    assert server.path.startswith("/v1/audio/transcriptions/stream?sdk=")
+    assert "sk-test" not in server.path
+    assert server.authorization == "Bearer sk-test"
     _assert_cleaned_up(server)
 
 

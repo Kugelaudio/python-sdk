@@ -64,6 +64,7 @@ from kugelaudio._diagnostics import (
     Operation,
 )
 from kugelaudio._sdk_metadata import sdk_headers, sdk_query_string
+from kugelaudio._ws_auth import async_ws_auth_kwargs
 from kugelaudio._http import HTTP_LIMITS, SharedAsyncHttp
 from kugelaudio.asr import ASRResource
 from kugelaudio.enhance import EnhanceResource
@@ -111,10 +112,6 @@ DEFAULT_TTS_URL = None  # If None, uses api_url
 
 EU_API_URL = "https://api.eu.kugelaudio.com"
 SUPPORTED_REGIONS = ("eu", "us", "global")
-
-
-def _sdk_query_separator(url: str) -> str:
-    return "&" if "?" in url else "?"
 
 
 def _resolve_region_url(region: Optional[str]) -> str:
@@ -1020,10 +1017,9 @@ class TTSResource:
         ws_url = self._client._tts_url.replace("https://", "wss://").replace(
             "http://", "ws://"
         )
-        ws_url = f"{ws_url}/ws/tts?api_key={self._client._api_key}"
+        ws_url = f"{ws_url}/ws/tts?{sdk_query_string()}"
         if model_id:
             ws_url += f"&model_id={model_id}"
-        ws_url += f"{_sdk_query_separator(ws_url)}{sdk_query_string()}"
 
         async with self._ws_lock:
             # Check if we have a valid connection for this URL
@@ -1064,7 +1060,9 @@ class TTSResource:
                 op.set_stage(STAGE_HANDSHAKE)
             try:
                 self._ws_connection = await websockets.connect(
-                    ws_url, compression=None
+                    ws_url,
+                    compression=None,
+                    **async_ws_auth_kwargs(ws_url, self._client._api_key),
                 )
             except ws_handshake_error_types(websockets) as e:
                 typed = classify_ws_handshake_error(e)
@@ -1400,14 +1398,15 @@ class TTSResource:
             ws_url = self._client._tts_url.replace("https://", "wss://").replace(
                 "http://", "ws://"
             )
-            ws_url = f"{ws_url}/ws/tts?api_key={self._client._api_key}"
+            ws_url = f"{ws_url}/ws/tts?{sdk_query_string()}"
             if model_id:
                 ws_url += f"&model_id={model_id}"
-            ws_url += f"{_sdk_query_separator(ws_url)}{sdk_query_string()}"
 
             op.set_stage(STAGE_HANDSHAKE)
             try:
-                async with websockets.connect(ws_url) as ws:
+                async with websockets.connect(
+                    ws_url, **async_ws_auth_kwargs(ws_url, self._client._api_key)
+                ) as ws:
                     op.set_stage(STAGE_SENDING_REQUEST)
                     await ws.send(json.dumps(request_data))
                     op.set_stage(STAGE_AWAITING_FIRST_AUDIO)

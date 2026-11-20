@@ -449,6 +449,7 @@ class _Server:
         self.on_audio: _Refusal | None = None
         self.config: dict | None = None
         self.path: str | None = None
+        self.authorization: str | None = None
         self.received: list[bytes] = []
         self.disconnected = threading.Event()
 
@@ -479,6 +480,7 @@ class _Server:
 
     def _serve(self, ws: Any) -> None:
         self.path = ws.request.path
+        self.authorization = ws.request.headers.get("Authorization")
         self.config = json.loads(ws.recv())
         if self.on_config is not None:
             self._refuse(ws, self.on_config)
@@ -548,7 +550,9 @@ def _check_noise_config(server: _Server, rate: int) -> None:
         "encoding": "pcm_s16le",
     }
     assert server.path is not None
-    assert server.path.startswith("/v1/audio/enhance/stream?api_key=sk-test&sdk=")
+    assert server.path.startswith("/v1/audio/enhance/stream?sdk=")
+    assert "sk-test" not in server.path
+    assert server.authorization == "Bearer sk-test"
 
 
 def test_stream_sync_audio_stream_input(ws_env, tmp_path):
