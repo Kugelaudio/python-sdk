@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import suppress
 from typing import (
     Any,
     AsyncIterator,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -218,6 +220,25 @@ class _DiagnosedSession:
     def _cancel_all_turns(self) -> None:
         for key in list(self._turn_ops):
             self._cancel_turn(key)
+
+    def _fail_all_turns(self, exc: BaseException) -> None:
+        """Settle every live turn as failed when the underlying socket is abandoned."""
+        for key in list(self._turn_ops):
+            op = self._turn_ops.pop(key, None)
+            if op is not None:
+                op.fail(exc)
+
+    async def _raise_settings_timeout(
+        self,
+        close_socket: Callable[[], Awaitable[None]],
+        cause: asyncio.TimeoutError,
+    ) -> NoReturn:
+        err = KugelAudioError("Timed out waiting for settings_updated acknowledgement")
+        err.__cause__ = cause
+        self._fail_all_turns(err)
+        with suppress(OSError):
+            await close_socket()
+        raise err from cause
 
     @staticmethod
     async def _within_turn(
@@ -752,6 +773,11 @@ class StreamingSession(_DiagnosedSession):
                     if self._on_word_timestamps:
                         self._on_word_timestamps(stamps)
 
+                if data.get("final"):
+                    self._last_final = data
+                    self._finish_turn()
+                    continue
+
                 if data.get("session_closed"):
                     self._capture_session_stats(data)
                     self._reset_turn()
@@ -766,6 +792,17 @@ class StreamingSession(_DiagnosedSession):
                     # Replay the unspoken turn on a fresh socket and drain
                     # again; raises when audio already went out.
                     replay = await self._recover_from_restart(e)
+                else:
+                    self._reset_turn()
+                    code = getattr(e, "code", None)
+                    if code in _WS_ERROR_CLOSE_CODES:
+                        err = classify_ws_close(
+                            code, getattr(e, "reason", None)
+                        )
+                        err.__cause__ = e
+                        self._fail_all_turns(err)
+                        raise err from e
+                    self._fail_all_turns(e)
             else:
                 raise
 
@@ -981,7 +1018,10 @@ class StreamingSession(_DiagnosedSession):
         if not self._is_started or not self._ws:
             await self.connect()
 
-        await self._ws.send(json.dumps({"update_settings": body}))
+        try:
+            await self._ws.send(json.dumps({"update_settings": body}))
+        except Exception as exc:
+            self._raise_settings_transport_error(exc)
         effective = await self._await_settings_ack()
 
         # Keep the local config in sync only after the server accepts the
@@ -990,6 +1030,24 @@ class StreamingSession(_DiagnosedSession):
             if hasattr(self._config, name):
                 setattr(self._config, name, value)
         return effective
+
+    def _raise_settings_transport_error(self, exc: Exception) -> NoReturn:
+        if "ConnectionClosed" in str(type(exc)) or isinstance(exc, OSError):
+            self._forget_socket()
+            self._reset_turn()
+            code = getattr(exc, "code", None)
+            if code in _WS_ERROR_CLOSE_CODES:
+                err: BaseException = classify_ws_close(
+                    code, getattr(exc, "reason", None)
+                )
+            else:
+                err = KugelAudioConnectionError(
+                    "WebSocket closed before settings_updated acknowledgement"
+                )
+            err.__cause__ = exc
+            self._fail_all_turns(err)
+            raise err from exc
+        raise exc
 
     async def _await_settings_ack(self) -> Dict[str, Any]:
         """Wait for the ``settings_updated`` frame; return its ``settings``.
@@ -1004,9 +1062,13 @@ class StreamingSession(_DiagnosedSession):
                     self._ws.recv(), timeout=_DEFAULT_RECV_TIMEOUT_S
                 )
             except asyncio.TimeoutError as exc:
-                raise KugelAudioError(
-                    "Timed out waiting for settings_updated acknowledgement"
-                ) from exc
+                # The old socket may still deliver this update's acknowledgement.
+                close_socket = self._ws.close
+                self._forget_socket()
+                self._reset_turn()
+                await self._raise_settings_timeout(close_socket, exc)
+            except Exception as exc:
+                self._raise_settings_transport_error(exc)
             data = json.loads(msg)
             if data.get("error"):
                 self._raise_frame_error(data)
@@ -1679,12 +1741,47 @@ class MultiContextSession(_DiagnosedSession):
         if not self._ws:
             await self.connect()
 
-        if await self._ws_send({"update_settings": body}):
-            await self._ws_send({"update_settings": body})
+        try:
+            if await self._ws_send({"update_settings": body}):
+                await self._ws_send({"update_settings": body})
+        except Exception as exc:
+            if isinstance(exc, OSError):
+                self._reset_dead_session()
+                err: BaseException = KugelAudioConnectionError(
+                    "WebSocket closed before settings_updated acknowledgement"
+                )
+                err.__cause__ = exc
+                self._fail_all_turns(err)
+                raise err from exc
+            if self._ws is None:
+                self._fail_all_turns(exc)
+            raise
         while True:
-            msg = await asyncio.wait_for(
-                self._ws.recv(), timeout=_DEFAULT_RECV_TIMEOUT_S
-            )
+            try:
+                msg = await asyncio.wait_for(
+                    self._ws.recv(), timeout=_DEFAULT_RECV_TIMEOUT_S
+                )
+            except asyncio.TimeoutError as exc:
+                # The old socket may still deliver this update's acknowledgement.
+                close_socket = self._ws.close
+                self._reset_dead_session()
+                await self._raise_settings_timeout(close_socket, exc)
+            except Exception as exc:
+                if "ConnectionClosed" in str(type(exc)) or isinstance(exc, OSError):
+                    self._reset_dead_session()
+                    code = getattr(exc, "code", None)
+                    if code in _WS_ERROR_CLOSE_CODES:
+                        err = classify_ws_close(
+                            code, getattr(exc, "reason", None)
+                        )
+                    else:
+                        err = KugelAudioConnectionError(
+                            "WebSocket closed before settings_updated acknowledgement"
+                        )
+                    err.__cause__ = exc
+                    self._fail_all_turns(err)
+                    raise err from exc
+                raise
             data = json.loads(msg)
             if data.get("error"):
                 self._raise_frame_error(data)

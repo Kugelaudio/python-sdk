@@ -1048,6 +1048,56 @@ class TestStreamingSessionDrain:
         chunks = [chunk async for chunk in session.drain()]
         assert chunks == []
 
+    @pytest.mark.asyncio
+    async def test_drain_raises_typed_error_on_ws_error_close_code(self):
+        """Error close codes (4001/4003/4029/4500) during drain() must raise
+        a typed SDK exception instead of returning silently."""
+        session = StreamingSession(
+            api_key="test",
+            tts_url="http://localhost:8000",
+        )
+        session._ws = _WSRaisingClose(4029, "Rate limit exceeded")
+        session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]
+        session._turn_audio = True
+        session._turn_replayed = True
+
+        with pytest.raises(RateLimitError) as exc_info:
+            async for _ in session.drain():
+                pass
+        assert exc_info.value.status_code == 429
+        assert session._ws is None
+        assert session._turn_frames == []
+        assert session._turn_audio is False
+        assert session._turn_replayed is False
+
+    @pytest.mark.asyncio
+    async def test_drain_captures_final_frame_on_last_final(self):
+        """drain() should capture the final frame into last_final just like send()."""
+        ws = MockWebSocket(
+            [
+                _make_audio_msg(idx=0, num_samples=20),
+                json.dumps(
+                    {
+                        "final": True,
+                        "total_audio_seconds": 0.9,
+                        "total_text_chunks": 1,
+                        "total_audio_chunks": 1,
+                    }
+                ),
+                json.dumps({"session_closed": True, "total_audio_seconds": 0.9}),
+            ]
+        )
+        session = StreamingSession(api_key="test", tts_url="http://localhost:8000")
+        session._ws = ws
+        session._is_started = True
+        session._turn_frames = [{"text": "hi", "flush": False}]
+
+        chunks = [c async for c in session.drain()]
+        assert len(chunks) == 1
+        assert session.last_final is not None
+        assert session.last_final["total_audio_seconds"] == 0.9
+
 
 class TestStreamingSessionCancelCurrent:
     """cancel_current() barge-in (KUG-1050)."""
@@ -2237,6 +2287,213 @@ class TestUpdateSettings:
         effective = sync.update_settings(temperature=0.2)
         assert effective == {"temperature": 0.2}
         assert json.loads(ws._sent[0]) == {"update_settings": {"temperature": 0.2}}
+
+    @pytest.mark.asyncio
+    async def test_stream_update_settings_classifies_ws_close_and_resets(self):
+        """A WS close while sending or awaiting settings_updated must surface a
+        typed SDK error and drop the dead socket instead of leaking raw ConnectionClosed."""
+        session = StreamingSession(api_key="t", tts_url="http://localhost:8000")
+        session._ws = _WSRaisingClose(4001, "bad key")
+        session._is_started = True
+        session._turn_frames = [{"text": "stale", "flush": False}]
+        session._turn_audio = True
+        session._turn_replayed = True
+
+        with pytest.raises(AuthenticationError):
+            await session.update_settings(speed=1.1)
+        assert session._ws is None
+        assert session._is_started is False
+        assert session._turn_frames == []
+        assert session._turn_audio is False
+        assert session._turn_replayed is False
+
+        # Send-side failure (e.g. half-open socket drops during ws.send)
+        session._ws = _WSSendRaisingClose(code=None, reason="no close frame received or sent")
+        session._is_started = True
+        session._turn_frames = [{"text": "stale2", "flush": False}]
+        session._turn_audio = True
+        with pytest.raises(KugelAudioConnectionError):
+            await session.update_settings(speed=1.1)
+        assert session._ws is None
+        assert session._is_started is False
+        assert session._turn_frames == []
+        assert session._turn_audio is False
+
+        session._ws = _WSSendRaisingClose(code=4029, reason="rate limited")
+        session._is_started = True
+        with pytest.raises(RateLimitError):
+            await session.update_settings(speed=1.1)
+        assert session._ws is None
+        assert session._is_started is False
+
+    @pytest.mark.asyncio
+    async def test_stream_update_settings_settles_abandoned_turn_operation(self):
+        """Losing the socket during update_settings() must fail any live turn
+        Operation so the next send() mints a fresh Operation instead of reusing
+        the abandoned turn's diagnostics."""
+        session = StreamingSession(api_key="t", tts_url="http://localhost:8000")
+        session._ws = MockWebSocket(
+            [
+                _make_audio_msg(idx=0, num_samples=10),
+                json.dumps({"chunk_complete": True}),
+            ]
+        )
+        session._is_started = True
+
+        # Unflushed send leaves a live Operation in _turn_ops with 1 audio chunk.
+        chunks = [c async for c in session.send("first", flush=False)]
+        assert len(chunks) == 1
+        op1 = session._live_turn()
+        assert op1 is not None
+        assert not op1.settled
+        assert op1.audio_chunks == 1
+
+        # Recv-side drop during update_settings() abandons the socket and fails op1.
+        session._ws = _WSRaisingClose(4029, "rate limited")
+        with pytest.raises(RateLimitError):
+            await session.update_settings(speed=1.1)
+        assert op1.settled is True
+        assert session._live_turn() is None
+
+        # Next send() reconnects and must receive a fresh Operation.
+        ws2 = MockWebSocket(
+            [
+                _make_audio_msg(idx=0, num_samples=10),
+                json.dumps({"chunk_complete": True}),
+            ]
+        )
+
+        async def fake_connect() -> None:
+            session._ws = ws2
+            session._is_started = True
+
+        session._connect_socket = fake_connect  # type: ignore[method-assign]
+        chunks2 = [c async for c in session.send("second", flush=False)]
+        assert len(chunks2) == 1
+        op2 = session._live_turn()
+        assert op2 is not None
+        assert op2 is not op1
+        assert op2.operation_id != op1.operation_id
+        assert op2.audio_chunks == 1
+
+        # Send-side drop during update_settings() also settles op2.
+        session._ws = _WSSendRaisingClose(code=None, reason="broken pipe")
+        with pytest.raises(KugelAudioConnectionError):
+            await session.update_settings(speed=1.0)
+        assert op2.settled is True
+        assert session._live_turn() is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("session_type", [StreamingSession, MultiContextSession])
+    async def test_settings_retry_ignores_late_ack_after_timeout(
+        self,
+        session_type: type[StreamingSession] | type[MultiContextSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        original = _WSScripted([
+            asyncio.TimeoutError(),
+            json.dumps({"settings_updated": True, "settings": {"speed": 1.1}}),
+        ])
+        fresh = _WSScripted([
+            json.dumps({"settings_updated": True, "settings": {"speed": 1.2}}),
+        ])
+        session = session_type(api_key="t", tts_url="http://localhost:8000")
+        session._ws = original
+        session._is_started = True
+        connects = _patch_reconnect(monkeypatch, session, fresh, mark_started=True)
+
+        with pytest.raises(KugelAudioError, match="Timed out waiting for settings_updated"):
+            await session.update_settings(speed=1.1)
+
+        assert await session.update_settings(speed=1.2) == {"speed": 1.2}
+        assert original._closed
+        assert connects == [fresh]
+        assert [json.loads(frame) for frame in original._sent] == [
+            {"update_settings": {"speed": 1.1}},
+        ]
+        assert [json.loads(frame) for frame in fresh._sent] == [
+            {"update_settings": {"speed": 1.2}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_multi_update_settings_wraps_timeout_and_ws_close(self):
+        """MultiContextSession.update_settings must wrap recv timeout and WS
+        close in typed SDK errors and fail live context Operations."""
+        session = MultiContextSession(api_key="t", tts_url="http://localhost:8000")
+        session._ws = MockWebSocket([])  # raises asyncio.TimeoutError
+        with pytest.raises(KugelAudioError, match="Timed out waiting for settings_updated"):
+            await session.update_settings(speed=1.1)
+
+        def ctx_audio(ctx_id: str) -> str:
+            frame = json.loads(_make_audio_msg(idx=0, num_samples=10))
+            frame["context_id"] = ctx_id
+            return json.dumps(frame)
+
+        # Open turns on two contexts; recv-side close must settle both.
+        session._ws = MockWebSocket(
+            [
+                ctx_audio("ctx-a"),
+                json.dumps({"chunk_complete": True, "context_id": "ctx-a"}),
+                ctx_audio("ctx-b"),
+                json.dumps({"chunk_complete": True, "context_id": "ctx-b"}),
+            ]
+        )
+        session._is_started = True
+        session._contexts = {"ctx-a", "ctx-b"}
+        _ = [
+            c
+            async for c in session.send(
+                "ctx-a", "hello", flush=False, chunk_complete_idle_timeout=0
+            )
+        ]
+        _ = [
+            c
+            async for c in session.send(
+                "ctx-b", "world", flush=False, chunk_complete_idle_timeout=0
+            )
+        ]
+        op_a = session._live_turn("ctx-a")
+        op_b = session._live_turn("ctx-b")
+        assert op_a is not None and not op_a.settled
+        assert op_b is not None and not op_b.settled
+
+        session._ws = _WSRaisingClose(4029, "rate limited")
+        with pytest.raises(RateLimitError):
+            await session.update_settings(speed=1.1)
+        assert session._ws is None
+        assert op_a.settled is True
+        assert op_b.settled is True
+        assert session._live_turn("ctx-a") is None
+        assert session._live_turn("ctx-b") is None
+
+        # After reconnecting, the next turn on ctx-a mints a fresh Operation.
+        session._ws = MockWebSocket(
+            [
+                ctx_audio("ctx-a"),
+                json.dumps({"chunk_complete": True, "context_id": "ctx-a"}),
+            ]
+        )
+        session._is_started = True
+        session._contexts = {"ctx-a"}
+        _ = [
+            c
+            async for c in session.send(
+                "ctx-a", "next", flush=False, chunk_complete_idle_timeout=0
+            )
+        ]
+        op_a2 = session._live_turn("ctx-a")
+        assert op_a2 is not None
+        assert op_a2 is not op_a
+        assert op_a2.operation_id != op_a.operation_id
+        assert op_a2.audio_chunks == 1
+
+        # Send-side drop during MultiContextSession.update_settings() also settles op_a2.
+        session._ws = _WSSendRaisingClose(4029, "rate limited")
+        with pytest.raises(RateLimitError):
+            await session.update_settings(speed=1.0)
+        assert session._ws is None
+        assert op_a2.settled is True
+        assert session._live_turn("ctx-a") is None
 
 
 _FRAME_WITH_ORIGINAL = {
