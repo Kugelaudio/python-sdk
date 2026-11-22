@@ -30,6 +30,8 @@ from kugelaudio import (
     KugelAudioError,
     RateLimitError,
     ServerRestartingError,
+    SpeakerPart,
+    SpeakerSegment,
     StreamingTranscriptionEvent,
     ValidationError,
     load_audio_stream,
@@ -59,6 +61,27 @@ REVISION = {
     "model": "test-model",
     "model_revision": "rev",
     "word_alternatives": [],
+}
+
+
+LABELLED_PARTIAL = {
+    **PARTIAL,
+    "turn_index": 0,
+    "speaker": "Speaker 1",
+    "speaker_segments": [{"speaker": "Speaker 1", "start_s": 0.0, "end_s": 1.5}],
+}
+SPEAKER_LABELS = {
+    "type": "speaker_labels",
+    "turn_index": 0,
+    "speaker": "Speaker 1",
+    "speaker_segments": [
+        {"speaker": "Speaker 1", "start_s": 0.0, "end_s": 1.5},
+        {"speaker": "Speaker 2", "start_s": 1.5, "end_s": 3.0},
+    ],
+    "speaker_parts": [
+        {"speaker": "Speaker 1", "text": "Ich möchte", "start_s": 0.1, "end_s": 1.4},
+        {"speaker": "Speaker 2", "text": "einen Flug", "start_s": 1.6, "end_s": 2.9},
+    ],
 }
 
 
@@ -269,6 +292,17 @@ def test_config_carries_every_set_option(ws_env, mode):
     }
 
 
+@MODES
+def test_config_carries_speaker_labels(ws_env, mode):
+    server, client = ws_env
+    _collect(client, mode, [b"\x00\x00"], sample_rate=16000, speaker_labels=True)
+    assert server.config == {
+        "type": "config",
+        "sample_rate": 16000,
+        "speaker_labels": True,
+    }
+
+
 def test_config_passes_a_single_language_code_through(ws_env):
     server, client = ws_env
     _collect(
@@ -346,6 +380,34 @@ def test_events_parsed_and_stream_ends_on_close_1000(ws_env, mode, caplog):
     assert revision.language == "de"
     assert "speech_started" in caplog.text  # skipped, not silently
     _assert_cleaned_up(server)
+
+
+@MODES
+def test_speaker_label_events_parsed(ws_env, mode, caplog):
+    server, client = ws_env
+    server.after_end = [
+        LABELLED_PARTIAL,
+        FINAL,
+        SPEAKER_LABELS,
+        {"type": "speaker_labels_stopped"},
+    ]
+    with caplog.at_level("WARNING", logger="kugelaudio.asr"):
+        events = _collect(
+            client, mode, [b"\x00\x00"], sample_rate=16000, speaker_labels=True
+        )
+    partial, final, labels, stopped = events
+    assert (partial.turn_index, partial.speaker) == (0, "Speaker 1")
+    assert partial.speaker_segments == [SpeakerSegment("Speaker 1", 0.0, 1.5)]
+    assert final.turn_index is None and final.speaker_parts == []
+    assert labels.type == "speaker_labels" and not labels.is_final
+    assert labels.partial_text == "" and labels.word_alternatives == []
+    assert [(p.speaker, p.text) for p in labels.speaker_parts] == [
+        ("Speaker 1", "Ich möchte"),
+        ("Speaker 2", "einen Flug"),
+    ]
+    assert labels.speaker_parts[1] == SpeakerPart("Speaker 2", "einen Flug", 1.6, 2.9)
+    assert stopped.type == "speaker_labels_stopped" and stopped.speaker is None
+    assert caplog.text == ""  # no frame skipped
 
 
 def test_events_arrive_while_input_is_still_being_sent(ws_env):
@@ -452,8 +514,20 @@ def test_refused_handshake_raises_typed_error(
         ("call.wav", {"sample_rate": 16000}, "load_audio_stream"),
         (b"RIFF", {"sample_rate": 16000}, "load_audio_stream"),
         (42, {"sample_rate": 16000}, "iterable"),
+        (
+            [b"\x00\x00"],
+            {"sample_rate": 8000, "speaker_labels": True},
+            "speaker_labels needs 16000 Hz",
+        ),
     ],
-    ids=["no-rate", "rate-mismatch", "path", "bytes", "not-iterable"],
+    ids=[
+        "no-rate",
+        "rate-mismatch",
+        "path",
+        "bytes",
+        "not-iterable",
+        "speaker-labels-rate",
+    ],
 )
 @pytest.mark.parametrize("method", ["stream_sync", "stream"])
 def test_bad_input_rejected_before_connecting(audio, kwargs, match, method):
@@ -566,3 +640,20 @@ def test_event_revises_final_defaults_false_and_is_parsed():
     assert revision.language == "de"
     # The positional constructor keeps its order; the new field comes last.
     assert StreamingTranscriptionEvent("t", True).revises_final is False
+
+
+def test_event_speaker_fields_default_empty_and_parse_a_silent_part():
+    event = StreamingTranscriptionEvent.from_dict(FINAL)
+    assert (event.turn_index, event.speaker) == (None, None)
+    assert event.speaker_segments == [] and event.speaker_parts == []
+    silent = StreamingTranscriptionEvent.from_dict(
+        {
+            "type": "speaker_labels",
+            "turn_index": 3,
+            "speaker": None,
+            "speaker_segments": [],
+            "speaker_parts": [{"speaker": None, "text": "hm", "start_s": 1, "end_s": 2}],
+        }
+    )
+    assert silent.turn_index == 3
+    assert silent.speaker_parts == [SpeakerPart(None, "hm", 1.0, 2.0)]

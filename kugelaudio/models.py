@@ -47,6 +47,46 @@ class WordAlternatives:
 
 
 @dataclass(frozen=True)
+class SpeakerSegment:
+    """A stretch of one speaker's speech in a turn, in seconds of the stream."""
+
+    speaker: str
+    start_s: float
+    end_s: float
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SpeakerSegment":
+        return cls(
+            speaker=str(data["speaker"]),
+            start_s=float(data["start_s"]),
+            end_s=float(data["end_s"]),
+        )
+
+
+@dataclass(frozen=True)
+class SpeakerPart:
+    """One speaker's words in a closed turn, in order.
+
+    ``speaker`` is ``None`` when no speech was heard in the turn.
+    """
+
+    speaker: Optional[str]
+    text: str
+    start_s: float
+    end_s: float
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SpeakerPart":
+        speaker = data.get("speaker")
+        return cls(
+            speaker=None if speaker is None else str(speaker),
+            text=str(data["text"]),
+            start_s=float(data["start_s"]),
+            end_s=float(data["end_s"]),
+        )
+
+
+@dataclass(frozen=True)
 class TranscriptionResponse:
     """Final ASR response; ``text`` is the OpenAI-compatible transcript field."""
 
@@ -99,6 +139,16 @@ class StreamingTranscriptionEvent:
     # True on the turn's revision: an ``alternatives`` frame whose text is a
     # more accurate transcript of the whole turn than its final's.
     revises_final: bool = False
+    # Set only on a stream opened with ``speaker_labels=True``. ``partial``
+    # events carry the turn's ``turn_index``, the speaker heard most so far
+    # (``speaker``, ``None`` before any speech) and ``speaker_segments``; a
+    # ``speaker_labels`` event gives a closed turn's final labels with its text
+    # split into ``speaker_parts``. A later ``speaker_labels`` event for the
+    # same ``turn_index`` replaces the earlier one.
+    turn_index: Optional[int] = None
+    speaker: Optional[str] = None
+    speaker_segments: List[SpeakerSegment] = field(default_factory=list)
+    speaker_parts: List[SpeakerPart] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StreamingTranscriptionEvent":
@@ -124,6 +174,17 @@ class StreamingTranscriptionEvent:
             word_alternatives=[
                 WordAlternatives.from_dict(item)
                 for item in data.get("word_alternatives", [])
+            ],
+            turn_index=(
+                int(data["turn_index"]) if data.get("turn_index") is not None else None
+            ),
+            speaker=(None if data.get("speaker") is None else str(data["speaker"])),
+            speaker_segments=[
+                SpeakerSegment.from_dict(item)
+                for item in data.get("speaker_segments", [])
+            ],
+            speaker_parts=[
+                SpeakerPart.from_dict(item) for item in data.get("speaker_parts", [])
             ],
         )
 

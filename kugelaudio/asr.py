@@ -39,7 +39,10 @@ _STREAM_PATH = "/v1/audio/transcriptions/stream"
 _SENDER_THREAD_NAME = "kugelaudio-asr-send"
 _SENDER_JOIN_TIMEOUT_S = 5.0
 _NORMAL_CLOSE = 1000
-_TRANSCRIPT_FRAMES = frozenset({"partial", "alternatives"})
+_TRANSCRIPT_FRAMES = frozenset(
+    {"partial", "alternatives", "speaker_labels", "speaker_labels_stopped"}
+)
+_SPEAKER_LABELS_RATE = 16000
 _END_OF_SPEECH = json.dumps({"type": "end_of_speech"})
 
 
@@ -54,6 +57,7 @@ class _StreamOptions:
     boosted_phrases: list[str] | None
     project_id: int | None
     dictionary_ids: list[int] | None
+    speaker_labels: bool | None
 
     def config_frame(self, sample_rate: int) -> dict[str, object]:
         """The ``config`` frame: ``sample_rate`` plus only the options set.
@@ -77,6 +81,8 @@ class _StreamOptions:
             frame["project_id"] = self.project_id
         if self.dictionary_ids is not None:
             frame["dictionary_ids"] = list(self.dictionary_ids)
+        if self.speaker_labels is not None:
+            frame["speaker_labels"] = self.speaker_labels
         return frame
 
 
@@ -107,6 +113,15 @@ def _stream_rate(audio: object, sample_rate: int | None, *, allow_async: bool) -
             "sample_rate is required when streaming raw PCM16 chunks to speech to text."
         )
     return sample_rate
+
+
+def _check_speaker_labels(speaker_labels: bool | None, sample_rate: int) -> None:
+    """Refuse before connecting what the server would refuse with 422."""
+    if speaker_labels and sample_rate != _SPEAKER_LABELS_RATE:
+        raise ValidationError(
+            f"speaker_labels needs {_SPEAKER_LABELS_RATE} Hz audio, got "
+            f"{sample_rate} Hz; resample to 16 kHz or turn speaker_labels off."
+        )
 
 
 def _max_bytes(sample_rate: int) -> int:
@@ -391,6 +406,7 @@ class ASRResource:
         boosted_phrases: list[str] | None = None,
         project_id: int | None = None,
         dictionary_ids: list[int] | None = None,
+        speaker_labels: bool | None = None,
     ) -> AsyncIterator[StreamingTranscriptionEvent]:
         """Transcribe live audio; iterate the transcript events as they arrive.
 
@@ -419,11 +435,19 @@ class ASRResource:
             boosted_phrases: Names, brands and domain terms to spell as written.
             project_id: The project whose dictionaries apply.
             dictionary_ids: The project dictionaries to apply; ``[]`` applies none.
+            speaker_labels: ``True`` labels who is talking: each partial gets
+                ``turn_index``, ``speaker`` and ``speaker_segments``, and each
+                closed turn a ``speaker_labels`` event with its text split into
+                ``speaker_parts``. Needs 16 kHz audio.
 
         Yields:
             A :class:`StreamingTranscriptionEvent` per partial, final and
             alternatives frame. ``event.revises_final`` marks the turn's
-            revision, which also carries ``event.language``.
+            revision, which also carries ``event.language``. With
+            ``speaker_labels``, also a ``speaker_labels`` event per closed turn
+            (a later one for the same ``turn_index`` replaces it) and one
+            ``speaker_labels_stopped`` event if labelling stops while the
+            transcript goes on; check ``event.type``.
 
         Raises:
             ValidationError: Bad input before connecting, or a refused option
@@ -439,6 +463,13 @@ class ASRResource:
                     print("revised:", event.partial_text, event.language)
                 elif event.is_final:
                     print("final:", event.partial_text, event.turn_end_reason)
+
+            Who said what, with ``speaker_labels=True``::
+
+                async for event in client.asr.stream(audio, speaker_labels=True):
+                    if event.type == "speaker_labels":
+                        for part in event.speaker_parts:
+                            print(part.speaker, part.text)
         """
         rate = _stream_rate(audio, sample_rate, allow_async=True)
         options = _StreamOptions(
@@ -449,7 +480,9 @@ class ASRResource:
             boosted_phrases,
             project_id,
             dictionary_ids,
+            speaker_labels,
         )
+        _check_speaker_labels(speaker_labels, rate)
         return _run_stream_async(
             self._stream_url(),
             self._client._api_key,
@@ -470,6 +503,7 @@ class ASRResource:
         boosted_phrases: list[str] | None = None,
         project_id: int | None = None,
         dictionary_ids: list[int] | None = None,
+        speaker_labels: bool | None = None,
     ) -> Iterator[StreamingTranscriptionEvent]:
         """Blocking :meth:`stream`, same arguments; input is sent from a thread.
 
@@ -492,7 +526,9 @@ class ASRResource:
             boosted_phrases,
             project_id,
             dictionary_ids,
+            speaker_labels,
         )
+        _check_speaker_labels(speaker_labels, rate)
         return _run_stream_sync(
             self._stream_url(),
             self._client._api_key,
