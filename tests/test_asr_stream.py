@@ -278,6 +278,7 @@ def test_config_carries_every_set_option(ws_env, mode):
         boosted_phrases=["Kratzenstein"],
         project_id=42,
         dictionary_ids=[],
+        partial_min_words=1,
     )
     assert server.config == {
         "type": "config",
@@ -289,6 +290,7 @@ def test_config_carries_every_set_option(ws_env, mode):
         "boosted_phrases": ["Kratzenstein"],
         "project_id": 42,
         "dictionary_ids": [],
+        "partial_min_words": 1,
     }
 
 

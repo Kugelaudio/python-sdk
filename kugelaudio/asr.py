@@ -58,6 +58,7 @@ class _StreamOptions:
     project_id: int | None
     dictionary_ids: list[int] | None
     speaker_labels: bool | None
+    partial_min_words: int | None
 
     def config_frame(self, sample_rate: int) -> dict[str, object]:
         """The ``config`` frame: ``sample_rate`` plus only the options set.
@@ -83,6 +84,8 @@ class _StreamOptions:
             frame["dictionary_ids"] = list(self.dictionary_ids)
         if self.speaker_labels is not None:
             frame["speaker_labels"] = self.speaker_labels
+        if self.partial_min_words is not None:
+            frame["partial_min_words"] = self.partial_min_words
         return frame
 
 
@@ -407,6 +410,7 @@ class ASRResource:
         project_id: int | None = None,
         dictionary_ids: list[int] | None = None,
         speaker_labels: bool | None = None,
+        partial_min_words: int | None = None,
     ) -> AsyncIterator[StreamingTranscriptionEvent]:
         """Transcribe live audio; iterate the transcript events as they arrive.
 
@@ -439,6 +443,10 @@ class ASRResource:
                 ``turn_index``, ``speaker`` and ``speaker_segments``, and each
                 closed turn a ``speaker_labels`` event with its text split into
                 ``speaker_parts``. Needs 16 kHz audio.
+            partial_min_words: Words a partial needs before it is sent, 1 to 64.
+                Omit it for the default of 3. A voice agent that stops talking
+                when the caller interrupts can pass 1 to see the caller's first
+                word sooner, at the price of more short partials.
 
         Yields:
             A :class:`StreamingTranscriptionEvent` per partial, final and
@@ -481,6 +489,7 @@ class ASRResource:
             project_id,
             dictionary_ids,
             speaker_labels,
+            partial_min_words,
         )
         _check_speaker_labels(speaker_labels, rate)
         return _run_stream_async(
@@ -504,6 +513,7 @@ class ASRResource:
         project_id: int | None = None,
         dictionary_ids: list[int] | None = None,
         speaker_labels: bool | None = None,
+        partial_min_words: int | None = None,
     ) -> Iterator[StreamingTranscriptionEvent]:
         """Blocking :meth:`stream`, same arguments; input is sent from a thread.
 
@@ -527,6 +537,7 @@ class ASRResource:
             project_id,
             dictionary_ids,
             speaker_labels,
+            partial_min_words,
         )
         _check_speaker_labels(speaker_labels, rate)
         return _run_stream_sync(
