@@ -1869,6 +1869,55 @@ def _ctx_created(context_id: str) -> str:
     return json.dumps({"context_created": True, "context_id": context_id})
 
 
+class TestMultiContextTurnEndedKey:
+    """Ingress adds a boolean ``turn_ended`` to every per-context error frame
+    on ``/ws/tts/multi``. This SDK does not read it: a frame carrying it
+    parses and behaves exactly like the same frame without it."""
+
+    @staticmethod
+    async def _run(extra: Dict[str, Any]) -> tuple:
+        frame = {
+            "error": "Model kugel-3 does not support language tr; use kugel-3.5",
+            "error_code": "VALIDATION_ERROR",
+            "code": 400,
+            "context_id": "ctx1",
+            "request_id": "req-1",
+        } | extra
+        ws = MockWebSocket(
+            [
+                json.dumps(frame),
+                _make_audio_msg_with_ctx("ctx1", idx=0),
+                json.dumps({"final": True, "context_id": "ctx1"}),
+            ]
+        )
+        session = MultiContextSession(api_key="test", tts_url="http://localhost:8000")
+        session._ws = ws
+        session._is_started = True
+        session._contexts = {"ctx1"}
+
+        with pytest.raises(KugelAudioError) as exc_info:
+            async for _ in session.send("ctx1", "Merhaba.", flush=True):
+                pass
+        err = exc_info.value
+        next_turn = [c async for c in session.send("ctx1", "Next.", flush=True)]
+        return (
+            type(err),
+            str(err),
+            err.error_code,
+            err.status_code,
+            err.request_id,
+            len(next_turn),
+            sorted(session._contexts),
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("turn_ended", [True, False])
+    async def test_context_error_with_turn_ended_behaves_as_today(self, turn_ended):
+        today = await self._run({})
+        assert today[0] is ValidationError
+        assert await self._run({"turn_ended": turn_ended}) == today
+
+
 class TestMultiContextRestartReplay:
     """A rolling-deploy close (1012 / 1013) is absorbed: the SDK reconnects,
     re-creates every context and replays the unspoken turns."""

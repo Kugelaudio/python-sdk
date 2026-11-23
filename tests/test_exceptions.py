@@ -172,6 +172,27 @@ class TestClassifyWsFrame:
         assert err.status_code == 429
         assert err.error_code == "TOO_MANY_CONTEXTS"
 
+    @pytest.mark.parametrize("turn_ended", [True, False])
+    def test_context_error_frame_with_turn_ended_classifies_as_today(self, turn_ended):
+        # /ws/tts/multi per-context error frames carry an additive boolean
+        # ``turn_ended``; this SDK ignores it.
+        frame = {
+            "error": "voice_id is required",
+            "error_code": "MISSING_VOICE_ID",
+            "code": 400,
+            "context_id": "ctx",
+            "request_id": "req-1",
+        }
+        today = classify_ws_frame(frame)
+        err = classify_ws_frame(frame | {"turn_ended": turn_ended})
+        assert type(err) is type(today) is ValidationError
+        assert (str(err), err.status_code, err.error_code, err.request_id) == (
+            str(today),
+            today.status_code,
+            today.error_code,
+            today.request_id,
+        )
+
     def test_frame_populates_canonical_status_code(self):
         # WS frames carry no HTTP status. The classifier must still set the
         # canonical status on the built exception so callers can rely on
