@@ -1,3 +1,5 @@
+## [kugelaudio-python-sdk-v2.10.1](https://github.com/Kugelaudio/KugelAudio/compare/python-sdk-v2.10.0...python-sdk-v2.10.1) (2026-11-25)
+
 ## [kugelaudio-python-sdk-v2.10.0](https://github.com/Kugelaudio/KugelAudio/compare/python-sdk-v2.9.1...python-sdk-v2.10.0) (2026-11-23)
 
 ## [kugelaudio-python-sdk-v2.9.1](https://github.com/Kugelaudio/KugelAudio/compare/python-sdk-v2.9.0...python-sdk-v2.9.1) (2026-11-14)
