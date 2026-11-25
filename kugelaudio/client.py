@@ -787,6 +787,8 @@ class TTSResource:
         self._ws_lock = asyncio.Lock()
         self._ws_url: Optional[str] = None
         self._keepalive_task: Optional[asyncio.Task[None]] = None
+        # A request owns the pooled socket from its send until its final frame.
+        self._pooled_busy = False
 
     def generate(
         self,
@@ -1351,11 +1353,19 @@ class TTSResource:
         if dictionary_ids is not None:
             request_data["dictionary_ids"] = dictionary_ids
 
+        if reuse_connection and self._pooled_busy:
+            # Server frames carry no request id, so the pooled socket serves one
+            # request at a time. It is still owned by a concurrent call, or by a
+            # stream its caller stopped reading: use a socket of our own.
+            reuse_connection = False
+
         if reuse_connection:
             # Use connection pooling for faster TTFA
-            op.set_stage(STAGE_CONNECTING)
-            ws = await self._get_ws_connection(model_id, op=op)
+            self._pooled_busy = True
+            finished = False
             try:
+                op.set_stage(STAGE_CONNECTING)
+                ws = await self._get_ws_connection(model_id, op=op)
                 op.set_stage(STAGE_SENDING_REQUEST)
                 await ws.send(json.dumps(request_data))
                 op.set_stage(STAGE_AWAITING_FIRST_AUDIO)
@@ -1366,9 +1376,11 @@ class TTSResource:
                         data = json.loads(msg)
 
                         if data.get("error"):
+                            finished = True
                             raise _server_frame_error(op, data)
 
                         if data.get("final"):
+                            finished = True
                             yield data
                             break
 
@@ -1392,6 +1404,13 @@ class TTSResource:
                 raise classify_ws_close(
                     getattr(e, "code", None), getattr(e, "reason", None)
                 ) from e
+            finally:
+                self._pooled_busy = False
+                if not finished:
+                    # The caller stopped early (break, cancel, error): the rest
+                    # of this request's frames are still on the socket and the
+                    # next request would read them as its own audio.
+                    await self._close_ws_connection()
 
         else:
             # Original behavior: new connection per request
