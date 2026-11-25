@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -516,7 +517,8 @@ def test_installed_version_matches_module_version():
 
 
 class _RecordingWebSocket:
-    """Pooled WS stand-in: records sent frames, answers with a final frame."""
+    """WS stand-in: records sent frames, answers with a final frame. Serves
+    both the pool and a request's own socket (``async with``)."""
 
     def __init__(self) -> None:
         self.sent: list = []
@@ -527,6 +529,12 @@ class _RecordingWebSocket:
     async def recv(self) -> str:
         return json.dumps({"final": True})
 
+    async def __aenter__(self) -> "_RecordingWebSocket":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
 
 class TestProjectIdWire:
     """ENG-560: project_id reaches the wire so dictionaries apply at synthesis."""
@@ -534,9 +542,13 @@ class TestProjectIdWire:
     def _client_with_ws(self):
         client = KugelAudio(api_key="test_key", keepalive_ping_interval=None)
         ws = _RecordingWebSocket()
-        return client, ws, patch.object(
-            client.tts, "_get_ws_connection", AsyncMock(return_value=ws)
+        patched = ExitStack()
+        patched.enter_context(
+            patch.object(client.tts, "_get_ws_connection", AsyncMock(return_value=ws))
         )
+        # Sync calls open their own socket: never the network.
+        patched.enter_context(patch("websockets.connect", lambda *_a, **_k: ws))
+        return client, ws, patched
 
     @pytest.mark.asyncio
     async def test_generate_async_sends_project_id_with_dictionary_ids(self):

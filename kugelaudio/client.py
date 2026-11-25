@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import threading
+from contextlib import aclosing
 from typing import (
     IO,
     TYPE_CHECKING,
@@ -787,6 +788,10 @@ class TTSResource:
         self._ws_lock = asyncio.Lock()
         self._ws_url: Optional[str] = None
         self._keepalive_task: Optional[asyncio.Task[None]] = None
+        self._pool_owner = threading.Lock()
+        """Held by the one request reading the pooled socket. Its frames
+        carry no request id, so a second concurrent request (any thread or
+        loop) takes a socket of its own instead (ENG-3312)."""
 
     def generate(
         self,
@@ -957,15 +962,17 @@ class TTSResource:
                     speed=speed,
                     dictionary_ids=dictionary_ids,
                     project_id=project_id,
+                    # Each sync call runs on its own thread and event loop, so
+                    # a pooled socket could not outlive it; sharing the pool
+                    # would let one call close the socket another call is
+                    # still reading (ENG-3312). It opens its own socket.
+                    reuse_connection=False,
                     _operation=_operation,
                 ):
                     result_queue.put(item)
             except Exception as e:
                 exception_holder.append(e)
             finally:
-                # Close the WS connection before the loop is destroyed
-                # so the next sync call can create a fresh one on its own loop.
-                await self._close_ws_connection()
                 result_queue.put(done_sentinel)
 
         def run_in_thread():
@@ -975,9 +982,6 @@ class TTSResource:
                 loop.run_until_complete(collect())
             finally:
                 loop.close()
-
-        # Reset the asyncio lock so it binds to the new thread's loop
-        self._ws_lock = asyncio.Lock()
 
         # Start async collection in background thread
         thread = threading.Thread(target=run_in_thread, daemon=True)
@@ -1114,6 +1118,23 @@ class TTSResource:
                 self._ws_connection = None
                 self._ws_url = None
 
+    async def _drop_ws_connection(self, ws: Any) -> None:
+        """Close *ws*, a socket this request read, and unpool it if it still is.
+
+        Never closes a newer pooled socket another request may be reading.
+        """
+        async with self._ws_lock:
+            if self._ws_connection is ws:
+                self._cancel_keepalive()
+                self._ws_connection = None
+                self._ws_url = None
+        try:
+            await ws.close()
+        except Exception:
+            # KEEP-JUSTIFIED: the socket is being discarded after a failed or
+            # abandoned turn; a close error leaves nothing to recover.
+            pass
+
     async def connect_async(self, model: str = "kugel-3.5") -> None:
         """Pre-establish WebSocket connection for faster first request.
 
@@ -1134,10 +1155,22 @@ class TTSResource:
             async for chunk in client.tts.stream_async("Hello"):
                 ...
         """
-        op = self._client._diagnostics.operation(OP_STREAM, TRANSPORT_WEBSOCKET)
-        async with op.step(STAGE_CONNECTING):
-            await self._get_ws_connection(model, op=op)
-        op.succeed()
+        # A request reading the pooled socket owns it: prewarming another
+        # model would close it mid-turn (ENG-3312). Skip the prewarm then.
+        if not self._pool_owner.acquire(blocking=False):
+            logger.info(
+                "Skipped WebSocket prewarm for model %s: a request is using "
+                "the pooled socket",
+                model,
+            )
+            return
+        try:
+            op = self._client._diagnostics.operation(OP_STREAM, TRANSPORT_WEBSOCKET)
+            async with op.step(STAGE_CONNECTING):
+                await self._get_ws_connection(model, op=op)
+            op.succeed()
+        finally:
+            self._pool_owner.release()
         logger.info("WebSocket connection pre-established for model: %s", model)
 
     def connect(self, model: str = "kugel-3.5") -> None:
@@ -1261,27 +1294,32 @@ class TTSResource:
         # failure no matter which of the ~10 raise sites below produced it.
         op = self._client._diagnostics.operation(_operation, TRANSPORT_WEBSOCKET)
         try:
-            async for item in self._stream_frames(
-                op,
-                text=text,
-                model_id=model_id,
-                voice_id=voice_id,
-                cfg_scale=cfg_scale,
-                temperature=temperature,
-                max_new_tokens=max_new_tokens,
-                sample_rate=sample_rate,
-                output_format=output_format,
-                reuse_connection=reuse_connection,
-                normalize=normalize,
-                language=language,
-                word_timestamps=word_timestamps,
-                speed=speed,
-                dictionary_ids=dictionary_ids,
-                project_id=project_id,
-            ):
-                if isinstance(item, AudioChunk):
-                    op.record_chunk(len(item.audio))
-                yield item
+            # aclosing: a caller that stops early ends the engine now, so the
+            # pooled socket is released (or dropped) before its next request.
+            async with aclosing(
+                self._stream_frames(
+                    op,
+                    text=text,
+                    model_id=model_id,
+                    voice_id=voice_id,
+                    cfg_scale=cfg_scale,
+                    temperature=temperature,
+                    max_new_tokens=max_new_tokens,
+                    sample_rate=sample_rate,
+                    output_format=output_format,
+                    reuse_connection=reuse_connection,
+                    normalize=normalize,
+                    language=language,
+                    word_timestamps=word_timestamps,
+                    speed=speed,
+                    dictionary_ids=dictionary_ids,
+                    project_id=project_id,
+                )
+            ) as frames:
+                async for item in frames:
+                    if isinstance(item, AudioChunk):
+                        op.record_chunk(len(item.audio))
+                    yield item
         except BaseException as e:
             op.fail(e)
             raise
@@ -1351,11 +1389,23 @@ class TTSResource:
         if dictionary_ids is not None:
             request_data["dictionary_ids"] = dictionary_ids
 
+        # Another request is reading the pooled socket: this one gets its own,
+        # or the two would read each other's frames (ENG-3312).
+        if reuse_connection and not self._pool_owner.acquire(blocking=False):
+            logger.debug(
+                "Pooled TTS socket is in use by another request; "
+                "this request opens its own socket"
+            )
+            reuse_connection = False
+
         if reuse_connection:
             # Use connection pooling for faster TTFA
-            op.set_stage(STAGE_CONNECTING)
-            ws = await self._get_ws_connection(model_id, op=op)
+            # The turn is over on the wire once its final or error frame is read.
+            turn_ended = False
+            ws: Any = None
             try:
+                op.set_stage(STAGE_CONNECTING)
+                ws = await self._get_ws_connection(model_id, op=op)
                 op.set_stage(STAGE_SENDING_REQUEST)
                 await ws.send(json.dumps(request_data))
                 op.set_stage(STAGE_AWAITING_FIRST_AUDIO)
@@ -1366,9 +1416,11 @@ class TTSResource:
                         data = json.loads(msg)
 
                         if data.get("error"):
+                            turn_ended = True
                             raise _server_frame_error(op, data)
 
                         if data.get("final"):
+                            turn_ended = True
                             yield data
                             break
 
@@ -1379,8 +1431,8 @@ class TTSResource:
                             yield WordTimestamp.list_from_frame(data)
 
                     except ConnectionClosed as e:
-                        # Connection was closed, clear pool and retry once
-                        await self._close_ws_connection()
+                        # Connection was closed: drop it from the pool.
+                        await self._drop_ws_connection(ws)
                         raise classify_ws_close(
                             getattr(e, "code", None), getattr(e, "reason", None)
                         ) from e
@@ -1388,10 +1440,20 @@ class TTSResource:
             except ConnectionClosed as e:
                 # Connection died outside the recv loop (for example during
                 # send); clear the pool and surface the server close code.
-                await self._close_ws_connection()
+                if ws is not None:
+                    await self._drop_ws_connection(ws)
                 raise classify_ws_close(
                     getattr(e, "code", None), getattr(e, "reason", None)
                 ) from e
+            finally:
+                try:
+                    if not turn_ended and ws is not None:
+                        # Stopped before the turn's end (break, barge-in,
+                        # cancel, error): its remaining frames are still on
+                        # the socket and would reach the next request.
+                        await self._drop_ws_connection(ws)
+                finally:
+                    self._pool_owner.release()
 
         else:
             # Original behavior: new connection per request
@@ -1405,7 +1467,9 @@ class TTSResource:
             op.set_stage(STAGE_HANDSHAKE)
             try:
                 async with websockets.connect(
-                    ws_url, **async_ws_auth_kwargs(ws_url, self._client._api_key)
+                    ws_url,
+                    compression=None,
+                    **async_ws_auth_kwargs(ws_url, self._client._api_key),
                 ) as ws:
                     op.set_stage(STAGE_SENDING_REQUEST)
                     await ws.send(json.dumps(request_data))
