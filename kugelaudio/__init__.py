@@ -74,7 +74,7 @@ from kugelaudio.streaming import (
     StreamingSessionSync,
 )
 
-__version__ = "2.10.1"
+__version__ = "2.11.0"
 __all__ = [
     "Audio",
     "AudioChunk",
