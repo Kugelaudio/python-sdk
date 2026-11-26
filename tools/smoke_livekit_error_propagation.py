@@ -30,7 +30,7 @@ def _options() -> _TTSOptions:
         cfg_scale=2.0,
         max_new_tokens=2048,
         api_key="test-key",
-        base_url="https://api.kugelaudio.com",
+        base_url="https://api.elbic.com",
     )
 
 

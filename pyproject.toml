@@ -105,7 +105,7 @@ kugelaudio-skills = "kugelaudio.skills:main"
 
 [project.urls]
 Homepage = "https://kugelaudio.com"
-Documentation = "https://docs.kugelaudio.com"
+Documentation = "https://docs.elbic.com"
 Repository = "https://github.com/Kugelaudio/python-sdk"
 Issues = "https://github.com/Kugelaudio/python-sdk/issues"
 Changelog = "https://github.com/Kugelaudio/python-sdk/blob/main/CHANGELOG.md"

@@ -34,7 +34,7 @@ from livekit.plugins import openai, silero
 from kugelaudio.livekit import STT as KugelAudioSTT
 from kugelaudio.livekit import TTS as KugelAudioTTS
 
-BASE_URL = os.environ.get("KUGELAUDIO_BASE_URL", "https://api.eu.kugelaudio.com")
+BASE_URL = os.environ.get("KUGELAUDIO_BASE_URL", "https://api.eu.elbic.com")
 GERMAN_VOICE = 1887
 INSTRUCTIONS = """
 Du bist Nora vom Kundenservice einer Sachversicherung und telefonierst auf Deutsch.

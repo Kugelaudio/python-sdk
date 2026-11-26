@@ -19,7 +19,7 @@ from kugelaudio._diagnostics import (
 
 Call = Tuple[str, Dict[str, str], bytes]
 
-TEST_API_URL = "https://api.kugelaudio.com"
+TEST_API_URL = "https://api.elbic.com"
 TEST_DIAGNOSTICS_URL = TEST_API_URL + DIAGNOSTICS_PATH
 #: What the client would really pass through: its own auth headers, verbatim.
 TEST_AUTH_HEADERS = {

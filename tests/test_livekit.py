@@ -57,7 +57,7 @@ class TestTTSRegion:
         from kugelaudio.livekit import TTS
 
         tts = TTS(api_key="eu-ka_test123")
-        assert tts._opts.base_url == "https://api.eu.kugelaudio.com"
+        assert tts._opts.base_url == "https://api.eu.elbic.com"
         assert tts._opts.api_key == "ka_test123"
 
     def test_explicit_region_overrides_key_prefix(self):
@@ -65,7 +65,7 @@ class TestTTSRegion:
         from kugelaudio.livekit import TTS
 
         tts = TTS(api_key="us-ka_test123", region="global")
-        assert tts._opts.base_url == "https://api.kugelaudio.com"
+        assert tts._opts.base_url == "https://api.elbic.com"
         assert tts._opts.api_key == "ka_test123"
 
     def test_base_url_overrides_region(self):
@@ -89,7 +89,7 @@ class TestTTSRegion:
 
         monkeypatch.setenv("KUGELAUDIO_API_KEY", "us-ka_envkey")
         tts = TTS()
-        assert tts._opts.base_url == "https://api.kugelaudio.com"
+        assert tts._opts.base_url == "https://api.elbic.com"
         assert tts._opts.api_key == "ka_envkey"
 
 

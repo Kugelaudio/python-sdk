@@ -39,17 +39,17 @@ class TestKugelAudioRegion:
 
     def test_explicit_region_eu(self):
         client = KugelAudio(api_key="ka_test123", region="eu")
-        assert client._api_url == "https://api.eu.kugelaudio.com"
+        assert client._api_url == "https://api.eu.elbic.com"
 
 
     def test_key_prefix_eu_strips_prefix(self):
         client = KugelAudio(api_key="eu-ka_test123")
-        assert client._api_url == "https://api.eu.kugelaudio.com"
+        assert client._api_url == "https://api.eu.elbic.com"
         assert client._api_key == "ka_test123"
 
     def test_explicit_region_overrides_key_prefix(self):
         client = KugelAudio(api_key="us-ka_test123", region="global")
-        assert client._api_url == "https://api.kugelaudio.com"
+        assert client._api_url == "https://api.elbic.com"
         assert client._api_key == "ka_test123"
 
     def test_api_url_overrides_region(self):
@@ -68,7 +68,7 @@ class TestKugelAudioRegion:
 
     def test_tts_url_defaults_to_region_url(self):
         client = KugelAudio(api_key="us-ka_test123")
-        assert client._tts_url == "https://api.kugelaudio.com"
+        assert client._tts_url == "https://api.elbic.com"
 
 
 class TestASRResource:

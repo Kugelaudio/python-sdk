@@ -551,7 +551,7 @@ def test_key_region_and_base_url_resolution(monkeypatch: pytest.MonkeyPatch) -> 
 
     eu = STT(api_key="eu-secret")
     assert eu._client._api_key == "secret"
-    assert eu._client._api_url == "https://api.eu.kugelaudio.com"
+    assert eu._client._api_url == "https://api.eu.elbic.com"
 
     monkeypatch.setenv("KUGELAUDIO_API_KEY", "env-key")
     custom = STT(base_url="http://localhost:8000/")

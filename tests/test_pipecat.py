@@ -84,7 +84,7 @@ class TestTTSRegion:
         from kugelaudio.pipecat import KugelAudioTTSService
 
         tts = KugelAudioTTSService(api_key="eu-ka_test123", voice_id=1)
-        assert tts._opts.base_url == "https://api.eu.kugelaudio.com"
+        assert tts._opts.base_url == "https://api.eu.elbic.com"
         assert tts._opts.api_key == "ka_test123"
 
     def test_explicit_region_overrides_key_prefix(self):
@@ -92,7 +92,7 @@ class TestTTSRegion:
         from kugelaudio.pipecat import KugelAudioTTSService
 
         tts = KugelAudioTTSService(api_key="us-ka_test123", voice_id=1, region="global")
-        assert tts._opts.base_url == "https://api.kugelaudio.com"
+        assert tts._opts.base_url == "https://api.elbic.com"
         assert tts._opts.api_key == "ka_test123"
 
     def test_base_url_overrides_region(self):
@@ -119,7 +119,7 @@ class TestTTSRegion:
 
         monkeypatch.setenv("KUGELAUDIO_API_KEY", "us-ka_envkey")
         tts = KugelAudioTTSService(voice_id=1)
-        assert tts._opts.base_url == "https://api.kugelaudio.com"
+        assert tts._opts.base_url == "https://api.elbic.com"
         assert tts._opts.api_key == "ka_envkey"
 
     def test_client_receives_clean_key(self):

@@ -131,7 +131,7 @@ class TestRealErrorPaths:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = StreamingSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
 
         with patch(
@@ -156,7 +156,7 @@ class TestRealErrorPaths:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = StreamingSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         ws = MagicMock()
         ws.send = AsyncMock()
@@ -391,7 +391,7 @@ class TestOperationScope:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = StreamingSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         first = ScriptedWebSocket([_restart_close()])
         second = ScriptedWebSocket(
@@ -439,7 +439,7 @@ class TestOperationScope:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = StreamingSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         ws = ScriptedWebSocket([{"error": "nope", "error_code": "INTERNAL_ERROR"}])
 
@@ -464,7 +464,7 @@ class TestOperationScope:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = MultiContextSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         session._ws = ScriptedWebSocket(
             [
@@ -504,7 +504,7 @@ class TestOperationScope:
 
         reporter = live_reporter(FakeSender())
         session = MultiContextSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         session._ws = ScriptedWebSocket(
             [_audio("a"), {"final": True, "context_id": "a"}]
@@ -529,7 +529,7 @@ class TestOperationScope:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = MultiContextSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         session._ws = ScriptedWebSocket(
             [
@@ -566,7 +566,7 @@ class TestOperationScope:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = MultiContextSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         session._ws = ScriptedWebSocket([_audio("a"), ConnectionClosedError(None, None)])
         session._is_started = True
@@ -617,7 +617,7 @@ class TestOperationScope:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = StreamingSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         second = ScriptedWebSocket([{"error": "boom", "error_code": "INTERNAL_ERROR"}])
         session._ws = ScriptedWebSocket([_restart_close()])
@@ -649,7 +649,7 @@ class TestOperationScope:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = MultiContextSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         second = ScriptedWebSocket(
             [
@@ -682,7 +682,7 @@ class TestOperationScope:
 
         reporter = live_reporter(FakeSender())
         session = MultiContextSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         session._ws = ScriptedWebSocket(
             [
@@ -743,7 +743,7 @@ class TestHandshakeRequestId:
         sender = FakeSender()
         reporter = live_reporter(sender)
         session = StreamingSession(
-            api_key="k", tts_url="https://api.kugelaudio.com", diagnostics=reporter
+            api_key="k", tts_url="https://api.elbic.com", diagnostics=reporter
         )
         with patch(
             "websockets.connect",

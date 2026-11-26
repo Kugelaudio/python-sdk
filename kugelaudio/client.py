@@ -108,10 +108,10 @@ def _warn_if_no_language(language: Optional[str], normalize: bool = True) -> Non
 # Default API endpoints
 # By default, TTS WebSocket connects to the same URL as the API
 # (the backend proxies WebSocket requests to the TTS server)
-DEFAULT_API_URL = "https://api.kugelaudio.com"
+DEFAULT_API_URL = "https://api.elbic.com"
 DEFAULT_TTS_URL = None  # If None, uses api_url
 
-EU_API_URL = "https://api.eu.kugelaudio.com"
+EU_API_URL = "https://api.eu.elbic.com"
 SUPPORTED_REGIONS = ("eu", "us", "global")
 
 
@@ -1892,7 +1892,7 @@ class KugelAudio:
                 select the direct EU endpoint (the prefix is stripped before
                 authenticating).
             api_url: API base URL. When set, takes precedence over *region* and any
-                key prefix. (default: ``https://api.kugelaudio.com``)
+                key prefix. (default: ``https://api.elbic.com``)
             tts_url: TTS server URL (default: same as api_url, the backend proxies WebSocket)
             timeout: Request timeout in seconds
             keepalive_ping_interval: Seconds between WebSocket ping frames sent on the
@@ -1904,7 +1904,7 @@ class KugelAudio:
                 geo-routed API endpoint.
             telemetry: Opt in or out of anonymous client-error diagnostics.
                 ``None`` (default) enables them only on the hosted
-                ``*.kugelaudio.com`` API; a custom or on-premise *api_url* is
+                ``*.elbic.com`` (or ``*.kugelaudio.com``) API; a custom or on-premise *api_url* is
                 off by default. The ``KUGELAUDIO_TELEMETRY`` environment
                 variable (``1/true/on/yes`` or ``0/false/off/no``) overrides
                 this argument. Reports carry error class, failure stage,
@@ -1922,7 +1922,7 @@ class KugelAudio:
         if not api_key:
             raise ValidationError(
                 "KugelAudio API key is missing. Pass api_key=... to the "
-                "client. Get a key at https://www.kugelaudio.com/dashboard."
+                "client. Get a key at https://www.elbic.com/dashboard."
             )
 
         clean_key, detected_region = _parse_api_key(api_key)
@@ -1987,7 +1987,7 @@ class KugelAudio:
 
         Args:
             api_key: Your KugelAudio API key
-            api_url: API base URL (default: https://api.kugelaudio.com)
+            api_url: API base URL (default: https://api.elbic.com)
             tts_url: TTS server URL (default: same as api_url)
             timeout: Request timeout in seconds
             model: Model to pre-connect for (e.g. 'kugel-3.5')

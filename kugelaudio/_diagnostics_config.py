@@ -20,7 +20,8 @@ DIAGNOSTICS_PATH = "/v1/sdk-diagnostics"
 
 ENV_TELEMETRY = "KUGELAUDIO_TELEMETRY"
 
-HOSTED_HOST_SUFFIX = ".kugelaudio.com"
+#: Hosted API domains: elbic, and kugelaudio for clients pinned to the old hosts.
+HOSTED_HOST_SUFFIXES = (".elbic.com", ".kugelaudio.com")
 ENDPOINT_KIND_HOSTED = "hosted"
 ENDPOINT_KIND_CUSTOM = "custom"
 
@@ -42,7 +43,7 @@ def endpoint_kind_for(api_url: Optional[str]) -> str:
         return ENDPOINT_KIND_CUSTOM
     return (
         ENDPOINT_KIND_HOSTED
-        if host.endswith(HOSTED_HOST_SUFFIX)
+        if host.endswith(HOSTED_HOST_SUFFIXES)
         else ENDPOINT_KIND_CUSTOM
     )
 
@@ -65,7 +66,7 @@ class DiagnosticsConfig:
 
     1. ``KUGELAUDIO_TELEMETRY`` env var,
     2. the explicit ``telemetry=`` constructor option,
-    3. enabled only when the effective API host ends in ``.kugelaudio.com``.
+    3. enabled only when the effective API host ends in ``.elbic.com`` or ``.kugelaudio.com``.
 
     ``auth_headers`` are the client's existing auth headers passed through
     verbatim: this class never builds credentials of its own.

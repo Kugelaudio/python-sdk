@@ -259,7 +259,7 @@ class KugelAudioTTSService(TTSService):
                 session. When omitted, timestamp generation remains disabled.
             telemetry: Opt in or out of anonymous client-error diagnostics,
                 exactly like ``KugelAudio(telemetry=...)``. ``None`` (default)
-                enables them only on the hosted ``*.kugelaudio.com`` API; the
+                enables them only on the hosted ``*.elbic.com`` (or ``*.kugelaudio.com``) API; the
                 ``KUGELAUDIO_TELEMETRY`` environment variable overrides this
                 argument.
             **kwargs: Additional arguments passed to Pipecat TTSService.

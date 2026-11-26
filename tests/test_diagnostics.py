@@ -62,9 +62,21 @@ def _reporter_source() -> str:
 
 class TestEnablement:
     def test_hosted_api_url_defaults_on(self):
-        config = DiagnosticsConfig.resolve("https://api.kugelaudio.com", None, {})
+        config = DiagnosticsConfig.resolve("https://api.elbic.com", None, {})
         assert config.enabled is True
         assert config.endpoint_kind == "hosted"
+
+    @pytest.mark.parametrize(
+        ("api_url", "kind"),
+        [
+            ("https://api.eu.elbic.com", "hosted"),
+            ("https://api.kugelaudio.com", "hosted"),
+            ("https://elbic.com.evil.example", "custom"),
+            ("https://kugelaudio.com.evil.example", "custom"),
+        ],
+    )
+    def test_both_hosted_domains_and_no_lookalikes(self, api_url: str, kind: str) -> None:
+        assert DiagnosticsConfig.resolve(api_url, None, {}).endpoint_kind == kind
 
     def test_custom_api_url_defaults_off(self):
         config = DiagnosticsConfig.resolve("https://tts.on-prem.internal", None, {})
@@ -76,12 +88,12 @@ class TestEnablement:
         assert config.enabled is True
 
     def test_explicit_option_beats_the_hosted_default(self):
-        config = DiagnosticsConfig.resolve("https://api.kugelaudio.com", False, {})
+        config = DiagnosticsConfig.resolve("https://api.elbic.com", False, {})
         assert config.enabled is False
 
     def test_env_off_beats_an_explicit_true(self):
         config = DiagnosticsConfig.resolve(
-            "https://api.kugelaudio.com", True, {ENV_TELEMETRY: "off"}
+            "https://api.elbic.com", True, {ENV_TELEMETRY: "off"}
         )
         assert config.enabled is False
 
@@ -94,7 +106,7 @@ class TestEnablement:
     @pytest.mark.parametrize("value", ["0", "false", "off", "no", "FALSE", " Off "])
     def test_falsey_env_values(self, value):
         config = DiagnosticsConfig.resolve(
-            "https://api.kugelaudio.com", None, {ENV_TELEMETRY: value}
+            "https://api.elbic.com", None, {ENV_TELEMETRY: value}
         )
         assert config.enabled is False
 
@@ -130,11 +142,11 @@ class TestEnablement:
 class TestTargetDerivation:
     def test_url_is_derived_from_the_effective_api_url(self):
         config = DiagnosticsConfig.resolve(TEST_API_URL, None, {})
-        assert config.url == "https://api.kugelaudio.com/v1/sdk-diagnostics"
+        assert config.url == "https://api.elbic.com/v1/sdk-diagnostics"
 
     def test_a_trailing_slash_on_the_api_url_does_not_double_up(self):
         config = DiagnosticsConfig.resolve(TEST_API_URL + "/", None, {})
-        assert config.url == "https://api.kugelaudio.com/v1/sdk-diagnostics"
+        assert config.url == "https://api.elbic.com/v1/sdk-diagnostics"
 
     def test_a_custom_api_url_targets_that_same_host(self):
         config = DiagnosticsConfig.resolve(
@@ -415,7 +427,7 @@ class TestAttributeAllowlist:
             {
                 "kugel.operation": OP_STREAM,
                 "kugel.text": "the secret invoice number is DE89 3704",
-                "http.url": "https://api.kugelaudio.com/v1/tts",
+                "http.url": "https://api.elbic.com/v1/tts",
                 "api_key": "sk-live-deadbeef",
             }
         )

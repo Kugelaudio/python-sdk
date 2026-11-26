@@ -28,7 +28,7 @@ def _opts():
         cfg_scale=2.0,
         max_new_tokens=2048,
         api_key="k",
-        base_url="https://api.kugelaudio.com",
+        base_url="https://api.elbic.com",
     )
 
 
@@ -50,7 +50,7 @@ def test_the_plugin_reporter_is_labelled_livekit_and_per_instance():
 
     tts = TTS(api_key="k")
     assert tts._diagnostics.integration == "livekit"
-    assert tts._diagnostics.url == "https://api.kugelaudio.com/v1/sdk-diagnostics"
+    assert tts._diagnostics.url == "https://api.elbic.com/v1/sdk-diagnostics"
     assert KugelAudio(api_key="k")._diagnostics.integration == "none"
 
 

@@ -89,7 +89,7 @@ async def main() -> int:
     parser.add_argument(
         "--base-url",
         type=str,
-        default=os.environ.get("KUGELAUDIO_TTS_URL", "https://api.kugelaudio.com"),
+        default=os.environ.get("KUGELAUDIO_TTS_URL", "https://api.elbic.com"),
     )
     args = parser.parse_args()
 

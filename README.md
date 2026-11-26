@@ -440,7 +440,7 @@ client = KugelAudio(api_key="your_api_key")
 # Or with custom options
 client = KugelAudio(
     api_key="your_api_key",           # Required: Your API key
-    api_url="https://api.kugelaudio.com",  # Optional: API base URL (default)
+    api_url="https://api.elbic.com",  # Optional: API base URL (default)
     timeout=60.0,                      # Optional: Request timeout in seconds
     telemetry=None,                    # Optional: anonymous error diagnostics
 )
@@ -456,8 +456,8 @@ select the direct EU endpoint when you need to pin traffic to Europe.
 
 | Region hint | Endpoint |
 |-------------|----------|
-| default | `api.kugelaudio.com` (geo-routed) |
-| `eu` | `api.eu.kugelaudio.com` |
+| default | `api.elbic.com` (geo-routed) |
+| `eu` | `api.eu.elbic.com` |
 
 **Option 1 — API key prefix** (simplest, works with env vars):
 
@@ -509,7 +509,7 @@ client = KugelAudio(
 `kugel-3.5` is the default model: use it for new integrations. Legacy
 IDs (`kugel-2.5`, `kugel-2-turbo`, `kugel-2`, `kugel-1`, `kugel-1-turbo`) are
 still accepted for backwards compatibility; see
-[Models](https://docs.kugelaudio.com/models).
+[Models](https://docs.elbic.com/models).
 
 ### List Available Models
 
@@ -712,7 +712,7 @@ of the assistant turn.
 > ⚠️ **Do not call `session.send(text, flush=True)` between sentences or
 > words.** Each explicit flush is a separate TTS request that pays the
 > full model time-to-first-audio (TTFA) again and produces an audible
-> gap. See [Chunking & per-segment latency](https://docs.kugelaudio.com/streaming/chunking-and-latency)
+> gap. See [Chunking & per-segment latency](https://docs.elbic.com/streaming/chunking-and-latency)
 > for the full rationale and ElevenLabs migration notes.
 
 ### Async Streaming Session
@@ -927,7 +927,7 @@ and no extra credential is involved. An API that does not serve the route
 answers `404`, and after three of them the SDK stops reporting for the rest of
 the process.
 
-Reporting is on by default only against the hosted `*.kugelaudio.com` API. A
+Reporting is on by default only against the hosted `*.elbic.com` (or `*.kugelaudio.com`) API. A
 custom or on-premise `api_url` is off by default.
 
 ```python
@@ -1120,7 +1120,7 @@ kugelaudio-skills install     # → ./.claude/skills/kugelaudio-tts/
 ```
 
 `--global` installs to `~/.claude/skills/`, and `--dest <dir>` selects another
-target. [Agent skills](https://docs.kugelaudio.com/guides/agent-skill) has the
+target. [Agent skills](https://docs.elbic.com/guides/agent-skill) has the
 details.
 
 ## License

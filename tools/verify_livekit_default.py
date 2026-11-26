@@ -16,7 +16,7 @@ import aiohttp
 
 from kugelaudio.livekit import DEFAULT_MODEL, TTS
 
-BASE_URL = os.environ.get("KUGELAUDIO_BASE_URL", "https://api.kugelaudio.com")
+BASE_URL = os.environ.get("KUGELAUDIO_BASE_URL", "https://api.elbic.com")
 API_KEY = os.environ.get("KUGELAUDIO_API_KEY", "")
 VOICE_ID = int(os.environ.get("KUGELAUDIO_VOICE_ID", "976"))
 TEXT = "This LiveKit synthesis should produce clear audio."
