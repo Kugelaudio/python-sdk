@@ -1391,6 +1391,12 @@ livekit = [
     { name = "aiohttp" },
     { name = "livekit-agents" },
 ]
+livekit-fluid = [
+    { name = "aiohttp", marker = "python_full_version >= '3.11'" },
+    { name = "livekit-agents", marker = "python_full_version >= '3.11'" },
+    { name = "livekit-plugins-openai", marker = "python_full_version >= '3.11'" },
+    { name = "pillow", marker = "python_full_version >= '3.11'" },
+]
 pipecat = [
     { name = "aiohttp" },
     { name = "pipecat-ai", marker = "python_full_version >= '3.11'" },
@@ -1434,19 +1440,23 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", marker = "python_full_version >= '3.11' and extra == 'livekit-fluid'", specifier = ">=3.8.0" },
     { name = "aiohttp", marker = "extra == 'livekit'", specifier = ">=3.8.0" },
     { name = "aiohttp", marker = "extra == 'pipecat'", specifier = ">=3.8.0" },
     { name = "flask", marker = "extra == 'tools'", specifier = ">=3.0.0" },
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "huggingface-hub", marker = "python_full_version >= '3.11' and extra == 'turn-detection'", specifier = ">=1.23.0,<2" },
     { name = "jinja2", marker = "python_full_version >= '3.11' and extra == 'turn-detection'", specifier = ">=3.1.6,<4" },
+    { name = "livekit-agents", marker = "python_full_version >= '3.11' and extra == 'livekit-fluid'", specifier = ">=1.8.2" },
     { name = "livekit-agents", marker = "extra == 'livekit'", specifier = ">=1.1.0" },
+    { name = "livekit-plugins-openai", marker = "python_full_version >= '3.11' and extra == 'livekit-fluid'", specifier = ">=1.8.2" },
     { name = "numpy", marker = "python_full_version >= '3.11' and extra == 'turn-detection'", specifier = ">=1.26.0,<3" },
     { name = "numpy", marker = "extra == 'tools'", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'watermark'", specifier = ">=1.26.0,<3" },
     { name = "onnxruntime", marker = "(python_full_version >= '3.11' and platform_machine != 'x86_64' and extra == 'turn-detection') or (python_full_version >= '3.11' and sys_platform != 'linux' and extra == 'turn-detection')", specifier = ">=1.24.3,<2" },
     { name = "onnxruntime-openvino", marker = "python_full_version >= '3.11' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'turn-detection'", specifier = "==1.24.1" },
     { name = "openai", extras = ["realtime"], marker = "python_full_version >= '3.10' and extra == 'live'", specifier = ">=3.14.1,<4" },
+    { name = "pillow", marker = "python_full_version >= '3.11' and extra == 'livekit-fluid'", specifier = ">=13.0.0" },
     { name = "pipecat-ai", marker = "python_full_version >= '3.11' and extra == 'pipecat'", specifier = ">=0.0.62" },
     { name = "pydantic", marker = "python_full_version >= '3.11' and extra == 'turn-detection'", specifier = ">=2.13.4,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
@@ -1458,7 +1468,7 @@ requires-dist = [
     { name = "transformers", marker = "python_full_version >= '3.11' and extra == 'turn-detection'", specifier = ">=5.13.0,<6" },
     { name = "websockets", specifier = ">=11.0" },
 ]
-provides-extras = ["dev", "live", "livekit", "pipecat", "tools", "turn-detection", "watermark"]
+provides-extras = ["dev", "live", "livekit", "livekit-fluid", "pipecat", "tools", "turn-detection", "watermark"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1535,6 +1545,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e0/b4/5a0d988e4bbb53160a2e70ae7ac16b039878ac8753d2971eac48953853be/livekit_agents-1.8.12.tar.gz", hash = "sha256:36158792acdf62bf88bff2752752d8d0f4256dcde559b35200d778739330ad7c", size = 2884687, upload-time = "2026-11-13T16:33:15.677Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8d/ca/91c011b7406a3e9ef05b59760e21afa1d35fe50a467917c990c882e4fe1d/livekit_agents-1.8.12-py3-none-any.whl", hash = "sha256:325242af94892c493b9068d61369573da1c5ee245ec7e82264ed1912dbe46839", size = 3022258, upload-time = "2026-11-13T16:33:13.247Z" },
+]
+
+[package.optional-dependencies]
+codecs = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+images = [
+    { name = "pillow" },
 ]
 
 [[package]]
@@ -1622,6 +1641,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/ac/82b229a99ee1a848636a13bb086e49763d19f1faf433fa3961bcb5903fc5/livekit_local_inference-0.3.1-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:554e6d0f480c1f00e52bd68baa4cb7967a132379c8684b6b08f2930b7b0ce6b2", size = 94277749, upload-time = "2026-11-12T19:03:38.579Z" },
     { url = "https://files.pythonhosted.org/packages/7b/f3/038560ce567a7ac775099d108549caa1002e4a757be758635b8b07a5b436/livekit_local_inference-0.3.1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ac8dd9ffd62a0699ae69e6ae950bb0e495290c104c59f169eb947439edbcedd0", size = 94343173, upload-time = "2026-11-12T19:03:45.356Z" },
     { url = "https://files.pythonhosted.org/packages/2f/e6/1ebd910f9309b56c41afd50c43ad684b9f866ca5526dcfd9a8b5e99f64f9/livekit_local_inference-0.3.1-cp314-cp314-win_amd64.whl", hash = "sha256:6da46b3a6e891194476e5443e113d85607d1742f61b4d21fac16b4ee994add93", size = 94352863, upload-time = "2026-11-12T19:03:52.509Z" },
+]
+
+[[package]]
+name = "livekit-plugins-openai"
+version = "1.8.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx2" },
+    { name = "livekit-agents", extra = ["codecs", "images"] },
+    { name = "openai" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/60/11/d18c6e235662695094b3befd37dd0e6374913ceb9e55b254b24f70dad4c4/livekit_plugins_openai-1.8.12.tar.gz", hash = "sha256:6a2a95bd3f454ac7fd026a6ba7ce763770f60e85562d7aba3d5451bfc61b08f6", size = 41024, upload-time = "2026-11-13T16:35:29.147Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/18/81/303785478e24fbd89bacc490f32f4358d3b6b8811ece8ed7d3898fb0a40d/livekit_plugins_openai-1.8.12-py3-none-any.whl", hash = "sha256:0b55d1d053bc32e26ed94646fc80d145b79292469f8e8db087796bc4d8bf16e3", size = 48644, upload-time = "2026-11-13T16:35:27.614Z" },
 ]
 
 [[package]]

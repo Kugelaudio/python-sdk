@@ -47,6 +47,11 @@ Or register as a LiveKit plugin:
     # Now available as livekit.plugins.kugelaudio
     from livekit.plugins import kugelaudio
 
+Speech to speech with Fluid 1 (needs ``kugelaudio[livekit-fluid]``):
+    from kugelaudio.livekit import RealtimeModel
+
+    session = AgentSession(llm=RealtimeModel(voice=973))
+
 Speech enhancement (noise removal) on the participant's audio:
     from kugelaudio.livekit import enhancement
 
@@ -73,6 +78,7 @@ if TYPE_CHECKING:
         enhancement as enhancement,
     )
     from kugelaudio.livekit.models import TTSModels as TTSModels
+    from kugelaudio.livekit.realtime import RealtimeModel as RealtimeModel
     from kugelaudio.livekit.turn import KugelTurnBridge as KugelTurnBridge
 
 _LIVEKIT_AVAILABLE = (
@@ -113,6 +119,19 @@ def __getattr__(name: str):
         from kugelaudio.livekit import enhance
 
         return getattr(enhance, name)
+
+    if name == "RealtimeModel":
+        _check_livekit_installed()
+        try:
+            from kugelaudio.livekit.realtime import RealtimeModel
+        except ImportError as exc:
+            raise ImportError(
+                "Fluid 1 in LiveKit requires Python 3.11 or newer and LiveKit's OpenAI "
+                "plugin 1.8.2 or newer. "
+                "Install with: pip install 'kugelaudio[livekit-fluid]'"
+            ) from exc
+
+        return RealtimeModel
 
     if name == "TTSModels":
         from kugelaudio.livekit.models import TTSModels
@@ -171,6 +190,7 @@ __all__ = [
     "EnhanceFrameProcessor",
     "enhancement",
     "TTSModels",
+    "RealtimeModel",
     "KugelTurnBridge",
     "DEFAULT_MODEL",
     "DEFAULT_SAMPLE_RATE",

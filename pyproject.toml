@@ -43,6 +43,20 @@ livekit = [
     "livekit-agents>=1.1.0",
     "aiohttp>=3.8.0",
 ]
+livekit-fluid = [
+    # Fluid 1 in LiveKit (kugelaudio.livekit.RealtimeModel) is the OpenAI plugin's
+    # GPTLiveModel, added in 1.8.1. Floor 1.8.2: the release the speech-to-speech
+    # contract test exercises; verified on 1.8.2 and 1.9.0 (latest, PyPI 2026-11-26).
+    # Python 3.11 and newer: the plugin needs livekit-agents[images], which on 3.10 takes
+    # pillow 12, and every pillow before 13.0 (3.11+) carries high-severity advisories
+    # (GHSA-332p-7hrc-92wf, 2026). On 3.10 the extra installs nothing, and importing
+    # RealtimeModel says what it needs. The pillow floor is ours: livekit-agents 1.8.2
+    # asks only pillow>=10.3.0 for images.
+    "livekit-agents>=1.8.2; python_version >= '3.11'",
+    "pillow>=13.0.0; python_version >= '3.11'",
+    "livekit-plugins-openai>=1.8.2; python_version >= '3.11'",
+    "aiohttp>=3.8.0; python_version >= '3.11'",
+]
 pipecat = [
     # The wrapper supports BOTH pipecat 0.x and 1.x at runtime (KUG-1123):
     #   - legacy 0.x path: a fresh /ws/tts/multi context PER TURN, pre-created on
